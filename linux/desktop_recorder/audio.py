@@ -28,7 +28,7 @@ def choose_monitor(default_sink: str, sinks_text: str, sources_text: str) -> str
     return monitor_from_listing(name, sources_text)
 
 
-def probe_pulse(device: str, timeout: float = 2.0) -> bool:
+def probe_pulse(device: str, timeout: float = 2.0, ffmpeg: str = "ffmpeg") -> bool:
     """True when ffmpeg can open this Pulse/PipeWire source.
 
     A suspended source that never delivers a buffer would otherwise block the
@@ -39,7 +39,7 @@ def probe_pulse(device: str, timeout: float = 2.0) -> bool:
     try:
         proc = subprocess.Popen(
             [
-                "ffmpeg",
+                ffmpeg or "ffmpeg",
                 "-hide_banner",
                 "-loglevel",
                 "error",

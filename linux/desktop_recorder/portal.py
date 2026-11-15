@@ -1,15 +1,41 @@
-"""xdg-desktop-portal ScreenCast.
+"""xdg-desktop-portal ScreenCast (DESIGN.md 11.1).
 
-Ubuntu's ffmpeg 6.1 package has no PipeWire input, so the portal file
-descriptor is handed to GStreamer and the pictures are encoded by ffmpeg.
+Ubuntu's ffmpeg package has no PipeWire input, so the portal file descriptor
+goes to GStreamer, and a Python pump sends the frames to ffmpeg.
+
+ScreenCast is pure: a transport does the D-Bus calls. GioTransport is the real
+transport. It imports gi only when it is made, so this module imports on Windows.
 """
 
 from __future__ import annotations
 
 import os
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Protocol
+
+__all__ = [
+    "PortalError",
+    "PortalStreamInfo",
+    "PortalSession",
+    "PortalTransport",
+    "ScreenCast",
+    "GioTransport",
+    "SOURCE_MONITOR",
+    "CURSOR_HIDDEN",
+    "CURSOR_EMBEDDED",
+    "PERSIST_UNTIL_REVOKED",
+]
+
+SOURCE_MONITOR = 1          # SelectSources "types": monitors only
+CURSOR_HIDDEN = 1           # "cursor_mode" values
+CURSOR_EMBEDDED = 2
+PERSIST_UNTIL_REVOKED = 2   # "persist_mode" value (portal version 4 and later)
+
+TEXT_NOT_STARTED = "The screen cast session did not start."
+TEXT_CANCELLED = "Screen sharing was cancelled."
+TEXT_NO_SCREEN = "No screen was shared."
+TEXT_TIMED_OUT = "The screen share dialog timed out."
 
 
 class PortalError(RuntimeError):
@@ -17,14 +43,19 @@ class PortalError(RuntimeError):
 
 
 @dataclass
-class PortalStream:
-    session: str
+class PortalStreamInfo:
     node_id: int
-    serial: str | None
-    fd: int
+    position: tuple[int, int] | None   # logical compositor coordinates, or None
+    size: tuple[int, int] | None       # logical size, or None
+    source_type: int
+
+
+@dataclass
+class PortalSession:
+    session: str
+    fd: int                  # owned fd for the PipeWire remote
     restore_token: str
-    width: int | None = None
-    height: int | None = None
+    streams: list[PortalStreamInfo] = field(default_factory=list)
 
 
 class PortalTransport(Protocol):
@@ -37,58 +68,98 @@ class PortalTransport(Protocol):
     def close_session(self, session: str) -> None:
         """End the portal session."""
 
+    def get_property(self, name: str) -> Any:
+        """Read an org.freedesktop.portal.ScreenCast property. None on error."""
+
+
+def _pair(value: Any) -> tuple[int, int] | None:
+    if isinstance(value, (tuple, list)) and len(value) >= 2:
+        try:
+            return int(value[0]), int(value[1])
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+def _int_or(value: Any, default: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _stream_info(item: Any) -> PortalStreamInfo:
+    node_id, props = item[0], (item[1] if len(item) > 1 else None)
+    props = props if isinstance(props, dict) else {}
+    return PortalStreamInfo(
+        node_id=int(node_id),
+        position=_pair(props.get("position")),
+        size=_pair(props.get("size")),
+        source_type=_int_or(props.get("source_type"), 0),
+    )
+
 
 class ScreenCast:
-    """Chooses sources and reads the stream list. The transport does the D-Bus calls."""
+    """Opens a screen cast session and reads all streams. The transport does the D-Bus calls."""
 
     def __init__(self, transport: PortalTransport) -> None:
         self.transport = transport
 
-    def open(self, restore_token: str = "") -> PortalStream:
+    def open(self, restore_token: str = "", show_pointer: bool = True) -> PortalSession:
         session_token = "dr" + uuid.uuid4().hex[:16]
-        created = self.transport.request(
-            "CreateSession",
-            {"session_handle_token": session_token},
-        )
+        created = self.transport.request("CreateSession", {"session_handle_token": session_token})
         session = str(created.get("session_handle") or "")
         if not session:
-            raise PortalError("The screen cast session did not start.")
+            raise PortalError(TEXT_NOT_STARTED)
+        try:
+            return self._open_session(session, restore_token, show_pointer)
+        except BaseException:
+            self.transport.close_session(session)
+            raise
+
+    def _open_session(self, session: str, restore_token: str, show_pointer: bool) -> PortalSession:
+        version = _int_or(self.transport.get_property("version") or 0, 0)
+        modes = _int_or(self.transport.get_property("AvailableCursorModes") or 0, 0)
+
         select: dict[str, Any] = {
             "session": session,
-            "types": 1,  # monitors, the same idea as one whole desktop
+            "types": SOURCE_MONITOR,
             "multiple": True,
-            "cursor_mode": 2,  # draw the pointer into the picture
-            "persist_mode": 2,
         }
-        if restore_token:
-            select["restore_token"] = restore_token
+        wanted = CURSOR_EMBEDDED if show_pointer else CURSOR_HIDDEN
+        if modes & wanted:
+            select["cursor_mode"] = wanted
+        elif modes & CURSOR_EMBEDDED:
+            select["cursor_mode"] = CURSOR_EMBEDDED
+        if version >= 4:
+            select["persist_mode"] = PERSIST_UNTIL_REVOKED
+            if restore_token:
+                select["restore_token"] = restore_token
         self.transport.request("SelectSources", select)
+
         started = self.transport.request("Start", {"session": session, "parent": ""})
-        streams = started.get("streams") or []
+        raw_streams = started.get("streams") or []
+        streams = [_stream_info(item) for item in raw_streams]
         if not streams:
-            self.transport.close_session(session)
-            raise PortalError("No screen was shared.")
-        node_id, props = streams[0]
-        props = props or {}
-        serial = props.get("pipewire-serial")
-        size = props.get("size")
-        width = height = None
-        if isinstance(size, (tuple, list)) and len(size) >= 2:
-            width, height = int(size[0]), int(size[1])
+            raise PortalError(TEXT_NO_SCREEN)
+
         fd = self.transport.open_pipewire(session)
-        return PortalStream(
+        return PortalSession(
             session=session,
-            node_id=int(node_id),
-            serial=str(serial) if serial else None,
             fd=fd,
             restore_token=str(started.get("restore_token") or restore_token or ""),
-            width=width,
-            height=height,
+            streams=streams,
         )
 
 
 class GioTransport:
     """Real portal client. Needs a session bus and xdg-desktop-portal."""
+
+    BUS_NAME = "org.freedesktop.portal.Desktop"
+    OBJECT_PATH = "/org/freedesktop/portal/desktop"
+    INTERFACE = "org.freedesktop.portal.ScreenCast"
+    DIALOG_TIMEOUT_MS = 120000
+    PROPERTY_TIMEOUT_MS = 5000
 
     def __init__(self) -> None:
         import gi
@@ -133,8 +204,13 @@ class GioTransport:
             box["details"] = details
             loop.quit()
 
+        def on_timeout() -> bool:
+            box["timed_out"] = True
+            loop.quit()
+            return False
+
         subscription = self._bus.signal_subscribe(
-            "org.freedesktop.portal.Desktop",
+            self.BUS_NAME,
             "org.freedesktop.portal.Request",
             "Response",
             path,
@@ -144,34 +220,58 @@ class GioTransport:
         )
         try:
             self._bus.call_sync(
-                "org.freedesktop.portal.Desktop",
-                "/org/freedesktop/portal/desktop",
-                "org.freedesktop.portal.ScreenCast",
+                self.BUS_NAME,
+                self.OBJECT_PATH,
+                self.INTERFACE,
                 method,
                 parameters,
                 GLib.VariantType.new("(o)"),
                 Gio.DBusCallFlags.NONE,
-                120000,
+                self.DIALOG_TIMEOUT_MS,
                 None,
             )
-            GLib.timeout_add(120000, lambda: loop.quit() or False)
-            loop.run()
+            if "code" not in box:
+                timeout_id = GLib.timeout_add(self.DIALOG_TIMEOUT_MS, on_timeout)
+                loop.run()
+                if not box.get("timed_out"):
+                    GLib.source_remove(timeout_id)
         finally:
             self._bus.signal_unsubscribe(subscription)
         if "code" not in box:
-            raise PortalError("The screen share dialog timed out.")
+            raise PortalError(TEXT_TIMED_OUT)
         if box["code"] != 0:
-            raise PortalError("Screen sharing was cancelled.")
+            raise PortalError(TEXT_CANCELLED)
         details = box["details"] or {}
         return dict(details)
+
+    def get_property(self, name: str) -> Any:
+        GLib = self._GLib
+        try:
+            result = self._bus.call_sync(
+                self.BUS_NAME,
+                self.OBJECT_PATH,
+                "org.freedesktop.DBus.Properties",
+                "Get",
+                GLib.Variant("(ss)", (self.INTERFACE, name)),
+                GLib.VariantType.new("(v)"),
+                self._Gio.DBusCallFlags.NONE,
+                self.PROPERTY_TIMEOUT_MS,
+                None,
+            )
+            value = result.unpack()[0]
+        except Exception:  # noqa: BLE001 - GLib.Error or a bad reply: the caller uses 0
+            return None
+        if hasattr(value, "unpack"):
+            value = value.unpack()
+        return value
 
     def open_pipewire(self, session: str) -> int:
         GLib = self._GLib
         parameters = GLib.Variant("(oa{sv})", (session, {}))
         result, fds = self._bus.call_with_unix_fd_list_sync(
-            "org.freedesktop.portal.Desktop",
-            "/org/freedesktop/portal/desktop",
-            "org.freedesktop.portal.ScreenCast",
+            self.BUS_NAME,
+            self.OBJECT_PATH,
+            self.INTERFACE,
             "OpenPipeWireRemote",
             parameters,
             GLib.VariantType.new("(h)"),
@@ -189,7 +289,7 @@ class GioTransport:
     def close_session(self, session: str) -> None:
         try:
             self._bus.call_sync(
-                "org.freedesktop.portal.Desktop",
+                self.BUS_NAME,
                 session,
                 "org.freedesktop.portal.Session",
                 "Close",
@@ -199,7 +299,7 @@ class GioTransport:
                 5000,
                 None,
             )
-        except Exception:
+        except Exception:  # noqa: BLE001 - the session can be closed already
             return
 
 

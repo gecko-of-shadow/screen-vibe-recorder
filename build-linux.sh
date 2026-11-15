@@ -11,7 +11,8 @@ fi
 prefix="${PREFIX:-$HOME/.local}"
 dest="$prefix/share/desktop-recorder"
 mkdir -p "$dest/desktop_recorder" "$prefix/bin" "$prefix/share/applications"
-cp -a linux/desktop_recorder/. "$dest/desktop_recorder/"
+cp linux/desktop_recorder/*.py "$dest/desktop_recorder/"
+cp packaging/linux/desktop-recorder.png "$dest/desktop-recorder.png"
 cat > "$prefix/bin/desktop-recorder" << EOF
 #!/bin/sh
 export DESKTOP_RECORDER_COMMAND="$prefix/bin/desktop-recorder"
@@ -23,9 +24,9 @@ cat > "$prefix/share/applications/desktop-recorder.desktop" << EOF
 [Desktop Entry]
 Type=Application
 Name=Desktop Recorder
-Comment=Record the desktop to MP4
+Comment=Record a region of the screen to MP4
 Exec=$prefix/bin/desktop-recorder
-Icon=media-record
+Icon=$dest/desktop-recorder.png
 Terminal=false
 Categories=AudioVideo;Recorder;
 StartupNotify=false

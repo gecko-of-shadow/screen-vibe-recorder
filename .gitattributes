@@ -1,3 +1,9 @@
 *.cmd text eol=crlf
 # Keep LF in the test kit, so file hashes and the embed check stay stable.
 test/** text eol=lf
+# Linux port: LF line ends (DESIGN.md 15.4).
+*.py text eol=lf
+*.sh text eol=lf
+linux/** text eol=lf
+packaging/linux/* text eol=lf
+packaging/linux/*.png binary

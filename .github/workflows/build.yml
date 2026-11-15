@@ -2,7 +2,7 @@ name: Build
 
 on:
   push:
-    branches: [main]
+    branches: [main, linux-port]
   pull_request:
 
 permissions:
@@ -23,6 +23,9 @@ jobs:
 
   linux:
     runs-on: ubuntu-24.04
+    env:
+      # A missing package fails a test. It does not skip it (DESIGN.md D23).
+      DESKTOP_RECORDER_REQUIRE_GUI: "1"
     steps:
       - uses: actions/checkout@v4
       - name: Install Ubuntu 24.04 packages
@@ -30,7 +33,23 @@ jobs:
           sudo apt-get update
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
             mono-devel libmono-system-windows-forms4.0-cil libmono-system-drawing4.0-cil \
-            python3 python3-gi python3-gi-cairo gir1.2-gtk-3.0 \
-            ffmpeg xvfb xdotool x11-utils
-      - name: Test
-        run: xvfb-run -a ./run-tests.sh
+            python3 python3-gi python3-gi-cairo python3-xlib gir1.2-gtk-3.0 \
+            gir1.2-gstreamer-1.0 gir1.2-notify-0.7 gstreamer1.0-plugins-base \
+            ffmpeg xvfb xdotool x11-utils x11-xserver-utils dbus
+      - name: Unit tests
+        run: |
+          env -u DISPLAY PYTHONPATH=linux python3 -m unittest discover -s tests -p 'test_linux*.py' -v
+          PYTHONPATH=linux python3 -m unittest discover -s tests -p 'test_pdeathsig.py' -v
+          PYTHONPATH=linux python3 -m unittest discover -s tests -p 'test_gst_pipeline.py' -v
+      - name: Core tests (Mono)
+        run: |
+          mcs -sdk:4.5 -nologo -target:exe -out:/tmp/desktop-recorder-tests.exe \
+            tests/CoreTests.cs RecorderCore.cs RecordingSession.cs
+          mono /tmp/desktop-recorder-tests.exe
+      - name: GUI tests
+        run: dbus-run-session -- xvfb-run -a -s "-screen 0 1280x800x24" env PYTHONPATH=linux python3 -m unittest discover -s tests -p 'test_x11*.py' -v
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: linux-test-output
+          path: ${{ runner.temp }}/dr-tests

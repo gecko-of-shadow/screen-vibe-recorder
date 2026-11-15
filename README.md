@@ -210,34 +210,124 @@ The app manifest makes the program per-monitor DPI aware. All positions and size
 
 ## Ubuntu Desktop 24.04
 
-The Linux build is the earlier tray recorder. It records the full screen. It has no region selector. X11 uses ffmpeg's `x11grab`. Wayland (the default Ubuntu session) asks the desktop for a screen through xdg-desktop-portal and reads the picture from PipeWire, then ffmpeg encodes it. System audio uses the PulseAudio API, which PipeWire provides on Ubuntu 24.04. The Windows `.exe` has no audio.
+The Ubuntu program has the same start flow as the Windows program:
+
+1. Press **Super+Shift+D**. The region selector opens. The screen stops and goes darker.
+2. Drag a box and release the mouse. The recording starts at once. On X11 you can also click a window to record it.
+3. Press **Super+Shift+D** again to stop. You can also use the tray menu. On X11 a small Stop button shows below the region.
+
+When the recording stops, the program copies the video to the clipboard. The tray menu shows the frame count and the file size of the last recording.
+
+### Selector keys (Ubuntu)
+
+| Key | Result |
+|---|---|
+| Drag, then release | Records the rectangle. |
+| Click | X11 only: records the window under the cursor. |
+| Shift while you drag | Keeps the selection square. |
+| Ctrl while you drag | Moves the rectangle that you draw. |
+| Arrow keys | Move the cursor 1 px. Shift + arrow keys move it 10 px. On Wayland the arrow keys move the selector cursor only, not the real pointer. |
+| Enter | Records the current selection, else the window under the cursor. |
+| Space | Records the whole screen (X11) or the whole shared monitor (Wayland). |
+| `~` | Records the monitor under the cursor. |
+| C | Shows or hides a crosshair across the screen. |
+| M | Shows or hides the magnifier near the cursor. |
+| P | Shows or hides the position in the size label. |
+| Esc | Closes the selector. Nothing is recorded. |
+| Right-click | Cancels the drag. With no drag and no selection, it closes the selector. |
+
+### X11 and Wayland
+
+The session type selects the capture. Ubuntu 24.04 starts a Wayland session by default. You can select "Ubuntu on Xorg" on the login screen.
+
+| Item | X11 session | Wayland session (default) |
+|---|---|---|
+| Capture | ffmpeg `x11grab` | GNOME screen-share portal, then PipeWire and GStreamer, then ffmpeg |
+| Region | Any rectangle on the X screen | A rectangle on one shared monitor |
+| Window detection | Yes | No. GNOME does not let apps read the window list. |
+| Red frame | Yes, outside the region | Experimental (`wayland_frame`), drawn through XWayland |
+| Stop button on the screen | Yes, below or above the region | No. Use the hotkey or the tray menu. |
+| Hotkey | The program grabs it | A GNOME custom shortcut named Desktop Recorder runs `desktop-recorder --toggle` |
+
+Limits:
+
+- The first Wayland recording opens the GNOME screen-share dialog. Pick the screen and allow "Remember". Later recordings use that permission again.
+- On Wayland, a region stays on one monitor. The program cannot detect windows, and it cannot show a Stop button.
+- Linux cannot keep a window out of the video. When a side of the red frame cannot be outside the region (the region touches the screen edge), that side is not drawn. When the Stop button has no room outside the region, it is not shown.
+- On Wayland, Esc can fail when GNOME does not give the keyboard to the selector. Right-click then cancels.
+- In "Changes only" mode, late captures can make "Real frames" too low. On X11 in "Changes only" mode, a late capture is not counted.
+- In "Changes only" mode, `mpdecimate` keeps at least one frame each second. On a still screen the file can end up to 1 s before the stop.
+- CI tests the X11 path on Xvfb only. A real GNOME session (Wayland portal, tray, NVENC, HiDPI) is not tested yet.
+
+### Settings (Ubuntu)
+
+Open **Settings...** from the tray menu. The file is `~/.config/DesktopRecorder/settings.txt`. A Windows settings file reads correctly on Ubuntu.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `folder` | `~/Recordings` | Folder for the MP4 files |
+| `fps` | `10` | Frames per second, 0.2 to 60 |
+| `quality` | `1` | 0 = smallest files, 1 = balanced, 2 = sharpest text |
+| `split_minutes` | `30` | Start a new file after this number of minutes. 0 = never. |
+| `record_on_launch` | `1` | Record the saved region when the program starts |
+| `copy_to_clipboard` | `1` | Copy the video when the recording stops |
+| `play_sounds` | `1` | Play a sound at start and stop |
+| `show_pointer` | `1` | Show the mouse pointer in the video |
+| `hotkey` | `Win+Shift+D` | Win is the Super key |
+| `capture_backend` | `ddagrab` | Windows only. Ubuntu keeps it and does not use it. |
+| `encoder` | `auto` | `auto` (NVENC, else x264), `h264_nvenc` or `libx264` |
+| `chroma` | `yuv420` | `yuv420` or `yuv444` |
+| `frame_rate_mode` | `changes` | `changes` or `fixed` |
+| `nvenc_cq` | `23` | NVENC quality at "balanced" |
+| `selector_crosshair`, `selector_magnifier`, `selector_position` | `0`, `1`, `1` | Selector options (C, M, P) |
+| `region`, `last_region` | empty | Last X11 region, in X screen px |
+| `record_audio` | `1` | Ubuntu only. Record system audio (what you hear). |
+| `start_on_login` | `0` | Ubuntu only. Writes `~/.config/autostart/desktop-recorder.desktop`. |
+| `wayland_restore_token` | empty | Ubuntu only. The screen-share permission. |
+| `wayland_region` | empty | Ubuntu only. Last Wayland region: monitor position, then x, y, width and height in stream px. |
+| `wayland_frame` | `1` | Ubuntu only. Show the experimental red frame on Wayland. |
+
+Save in Settings does not touch a running recording. The new values apply to the next recording.
+
+### Install
 
 Install the packages, then build and install the program for your user:
 
 ```
 sudo apt update
-sudo apt install ffmpeg python3 python3-gi python3-gi-cairo \
-  gir1.2-gtk-3.0 gir1.2-ayatanaappindicator3-0.1 gir1.2-notify-0.7 \
-  gstreamer1.0-plugins-base gstreamer1.0-pipewire \
-  pipewire pipewire-pulse wireplumber pulseaudio-utils \
-  xdg-desktop-portal xdg-desktop-portal-gnome xdg-desktop-portal-gtk \
-  xclip wl-clipboard
+sudo apt install ffmpeg python3 python3-gi python3-gi-cairo python3-xlib gir1.2-gtk-3.0 gir1.2-ayatanaappindicator3-0.1 gir1.2-notify-0.7 gir1.2-gstreamer-1.0 gstreamer1.0-plugins-base gstreamer1.0-pipewire pipewire pipewire-pulse wireplumber pulseaudio-utils xdg-desktop-portal xdg-desktop-portal-gnome xclip wl-clipboard
 ./build-linux.sh --install
 export PATH="$HOME/.local/bin:$PATH"
 desktop-recorder
 ```
 
-Log out and back in if `~/.local/bin` is not on your PATH yet. A monitor icon shows in the tray. On GNOME it uses an app indicator. On an X11 session such as Xfce it uses the classic tray.
+Log out and back in if `~/.local/bin` is not on your PATH yet. On Ubuntu Desktop the tray icon uses the app indicator extension (`gnome-shell-extension-appindicator`, installed by default). On other desktops, install that extension, or use a desktop with a classic tray.
 
-- **Super+Shift+D** is the same shortcut as Win+Shift+D. On X11 the program grabs it. On GNOME Wayland it is a custom shortcut named Desktop Recorder. Other Wayland desktops keep the tray menu.
-- The first Wayland recording opens the system screen-share dialog. Later recordings use that permission again.
-- System audio is the monitor of the default output. If that device is missing or does not answer, the recording continues with video only and the tray says so.
-- Settings are stored in `~/.config/DesktopRecorder/settings.txt`. "Start when I log in" writes `~/.config/autostart/desktop-recorder.desktop`.
-- `desktop-recorder --check` prints the capture backend. `desktop-recorder --smoke 2` records two seconds with X11 and exits.
+- System audio is the monitor of the default output. If that device is missing or does not answer, the recording continues with video only, and the start message says so.
+- `desktop-recorder --check` shows ffmpeg, the capture backend, the audio device and NVENC. `desktop-recorder --smoke 2` records two seconds of a 320x240 area with X11 and exits.
+- With the portable archive, `./desktop-recorder --install-menu` adds the program to your app menu.
 
-To run the tests on Ubuntu 24.04 (Mono runs the Windows rules; Python runs the Linux rules):
+### Frame rate (Ubuntu)
+
+The rule in "Choose a frame rate" applies on Ubuntu too:
 
 ```
-sudo apt install mono-devel libmono-system-windows-forms4.0-cil libmono-system-drawing4.0-cil x11-utils xdotool
+lowest safe fps = 1.5 x scroll speed (physical px/s) / (area height in px - 2 text lines)
+```
+
+On X11 the region is in X screen px. On Wayland it is in stream px. With GNOME scaling, stream px are physical px (not checked).
+
+### Tests (Ubuntu)
+
+```
+sudo apt install mono-devel libmono-system-windows-forms4.0-cil libmono-system-drawing4.0-cil python3-xlib gir1.2-gstreamer-1.0 xvfb xdotool x11-utils x11-xserver-utils dbus
 ./run-tests.sh
+```
+
+`run-tests.sh` runs the unit tests, the Mono core tests, then the GUI tests. It always runs the GUI tests in their own Xvfb (1280x800), never on your live desktop, because the tests move the pointer and grab keys. A missing package skips a test there. In CI (`DESKTOP_RECORDER_REQUIRE_GUI=1`), a missing package fails the test.
+
+The pure unit tests also run on Windows (Git Bash):
+
+```
+PYTHONPATH=linux python -m unittest discover -s tests -p 'test_linux*.py' -v
 ```

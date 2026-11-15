@@ -33,12 +33,19 @@ def update_gnome_shortcut(modifiers: int, key: str, command: str, runner: Callab
             return False
     binding = gtk_accelerator(modifiers, key)
     prefix = ["gsettings", "set", BINDING + ":" + PATH]
+    # gsettings parses each value as GVariant text. A command that starts with a quote
+    # (a quoted path with a space) does not parse as a bare string. Send string literals.
     steps = (
-        prefix + ["name", "Desktop Recorder"],
-        prefix + ["binding", binding],
-        prefix + ["command", command],
+        prefix + ["name", gvariant_string("Desktop Recorder")],
+        prefix + ["binding", gvariant_string(binding)],
+        prefix + ["command", gvariant_string(command)],
     )
     return all(_ok(runner(step)) for step in steps)
+
+
+def gvariant_string(text: str) -> str:
+    """A GVariant text literal of type s, for "gsettings set"."""
+    return "'" + text.replace("\\", "\\\\").replace("'", "\\'") + "'"
 
 
 def _stdout(result: object) -> str | None:

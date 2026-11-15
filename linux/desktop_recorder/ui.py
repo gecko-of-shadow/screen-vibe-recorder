@@ -1,85 +1,173 @@
-"""GTK tray and settings window."""
+"""GTK tray (DESIGN.md 12.1). It implements ControllerUi for capture.Controller.
+
+GDK_BACKEND is set in __main__.py before this module loads, because Gtk loads here.
+"""
 
 from __future__ import annotations
 
 import os
+import shlex
+import signal
 import subprocess
 import sys
 
 import gi
 
 gi.require_version("Gtk", "3.0")
-from gi.repository import GLib, Gtk
+from gi.repository import GLib, Gtk  # noqa: E402
 
-from . import sounds
-from .autostart import autostart_enabled, write_autostart
-from .capture import Capture
-from .clipboard import copy_files
-from .ffmpeg_cmd import capture_backend
-from .gnome_hotkey import update_gnome_shortcut
-from .hotkey import parse_key
-from .hotkey_x11 import X11Hotkey
-from .settings import Settings, load_settings, save_settings, config_dir
-from .single_instance import InstanceServer
+from . import messages, sounds  # noqa: E402
+from .autostart import autostart_command, autostart_enabled, command_path, write_autostart  # noqa: E402
+from .capture import Controller, resolve_ffmpeg  # noqa: E402
+from .encoders import NvencProbe  # noqa: E402
+from .ffmpeg_cmd import capture_backend  # noqa: E402
+from .gnome_hotkey import update_gnome_shortcut  # noqa: E402
+from .hotkey_x11 import X11Hotkey  # noqa: E402
+from .settings import ENCODER_AUTO, Settings, config_dir, copy_settings, load_settings, save_settings  # noqa: E402
+from .single_instance import InstanceServer, parse_command, send_command, socket_path  # noqa: E402
 
-QUALITY = (
-    "Smallest files (text still readable)",
-    "Balanced (recommended)",
-    "Sharpest text (bigger files)",
-)
+HOTKEY_NOTICE_MS = 6000
 
 
-def run() -> int:
-    if os.environ.get("DISPLAY") and not os.environ.get("GDK_BACKEND"):
-        # A Wayland session still gets an X display via XWayland. Prefer the real one.
-        if capture_backend() == "wayland":
-            os.environ["GDK_BACKEND"] = "wayland"
-    app = Tray()
-    if not app.owned:
+def _log(line: str) -> None:
+    try:
+        sys.stderr.write(line + "\n")
+        sys.stderr.flush()
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def run(select: bool = False, token: str = "", from_toggle: bool = False) -> int:
+    tray = Tray()
+    if not tray.owned:
+        if from_toggle:
+            # Lost the start race to another --toggle: send it our TOGGLE once (D29).
+            reply = send_command(socket_path(), "TOGGLE " + token if token else "TOGGLE")
+            if reply is None:
+                _log(messages.DID_NOT_ANSWER)
+            else:
+                print(reply)
+            return 0
         dialog = Gtk.MessageDialog(
             message_type=Gtk.MessageType.INFO,
             buttons=Gtk.ButtonsType.OK,
-            text="Desktop Recorder is already running. Look for its icon in the tray.",
+            text=messages.ALREADY_RUNNING,
         )
+        dialog.set_title(messages.APP_TITLE)
         dialog.run()
         dialog.destroy()
         return 0
+    for signum in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+        GLib.unix_signal_add(GLib.PRIORITY_HIGH, signum, tray.on_signal)
+    tray.begin(select, token)
     Gtk.main()
     return 0
 
 
 class Tray:
     def __init__(self) -> None:
-        self.settings = load_settings()
+        self.settings: Settings = load_settings()
         self.settings.start_on_login = autostart_enabled()
-        self.capture = Capture()
-        self.capture.x11.on_failed = self._failed
-        self.hotkey: X11Hotkey | None = None
-        socket_path = os.path.join(config_dir(), "control.sock")
-        self.server = InstanceServer(socket_path, self._command)
+        self.backend = capture_backend()
+        self.server = InstanceServer(socket_path(), self._command, schedule=_schedule_on_main)
         self.owned = self.server.start()
         if not self.owned:
             return
+        self.token = ""
+        self.hotkey: X11Hotkey | None = None
+        self.hotkey_active = False
+        self._dialog = None
+        # Exit and a session signal set this flag. Then the code after a nested dialog
+        # loop does nothing (no save, no new hotkey, no new message).
+        self._quitting = False
+        self._message_dialog = None
+        self._notify_failed = os.environ.get("DESKTOP_RECORDER_NOTIFY", "").strip().lower() == "stderr"
+        self._notify_module = None
+        self.probe = NvencProbe()
+        self.controller = Controller(self, lambda: self.settings, self._save_quietly, self.probe, None)
+        self._icon_paths = self._write_icons()
         self._build_menu()
-        self._install_hotkey()
+
+    # ------------------------------------------------------------ start and stop
+
+    def begin(self, select: bool, token: str) -> None:
+        self.token = token or ""
+        self._install_hotkey(after_save=False)
+        self.controller.refresh_audio()
         self.refresh()
-        if self.settings.record_on_launch:
-            GLib.idle_add(self.start_recording)
+        ffmpeg = resolve_ffmpeg()
+        if not self.settings.record_on_launch and self.settings.encoder == ENCODER_AUTO and ffmpeg:
+            self.probe.warm_up(ffmpeg)
+        _log(messages.READY_LINE)
+        if select:
+            GLib.idle_add(self._toggle_once, self.token)
+        elif self.settings.record_on_launch:
+            GLib.idle_add(self._start_saved_once)
+
+    def _toggle_once(self, token: str) -> bool:
+        if not self._quitting:
+            self.controller.toggle(token)
+        return False
+
+    def _start_saved_once(self) -> bool:
+        if not self._quitting:
+            self.controller.start_saved_region()
+        return False
+
+    def on_signal(self, *_args) -> bool:
+        self.quit()
+        return False
+
+    def quit(self) -> None:
+        if self._quitting:
+            return
+        self._quitting = True
+        # Gtk.main_quit() does not end the nested loop of Gtk.Dialog.run(). Close each
+        # open dialog, so that its run() returns and the outer Gtk.main() can end.
+        if self._message_dialog is not None:
+            self._message_dialog.response(Gtk.ResponseType.CANCEL)
+        if self._dialog is not None:
+            self._dialog.close_for_exit()
+        try:
+            self.controller.stop_sync()
+        except Exception as exc:  # noqa: BLE001
+            _log(f"Desktop Recorder: stop at exit failed: {exc}")
+        if self.hotkey is not None:
+            self.hotkey.stop()
+            self.hotkey = None
+        self.server.stop()
+        if self._icon is not None:
+            self._icon.set_visible(False)
+        Gtk.main_quit()
+
+    # ------------------------------------------------------------ menu
+
+    def _write_icons(self) -> tuple[str, str]:
+        from . import icons
+
+        try:
+            return icons.write_icons(config_dir())
+        except Exception as exc:  # noqa: BLE001
+            _log(f"Desktop Recorder: cannot write the tray icons: {exc}")
+            return icons.icon_path(config_dir(), False), icons.icon_path(config_dir(), True)
 
     def _build_menu(self) -> None:
         self.menu = Gtk.Menu()
-        self.status_item = Gtk.MenuItem(label="Not recording")
+        self.status_item = Gtk.MenuItem(label=messages.NOT_RECORDING)
         self.status_item.set_sensitive(False)
-        self.toggle_item = Gtk.MenuItem(label="Start recording")
-        self.toggle_item.connect("activate", lambda *_a: self.toggle())
-        folder_item = Gtk.MenuItem(label="Open recordings folder")
+        self.stats_item = Gtk.MenuItem(label="")
+        self.stats_item.set_sensitive(False)
+        self.toggle_item = Gtk.MenuItem(label=messages.MENU_SELECT)
+        self.toggle_item.connect("activate", lambda *_a: self._menu_toggle())
+        folder_item = Gtk.MenuItem(label=messages.MENU_OPEN_FOLDER)
         folder_item.connect("activate", lambda *_a: self.open_folder())
-        settings_item = Gtk.MenuItem(label="Settings...")
+        settings_item = Gtk.MenuItem(label=messages.MENU_SETTINGS)
         settings_item.connect("activate", lambda *_a: self.show_settings())
-        quit_item = Gtk.MenuItem(label="Exit")
+        quit_item = Gtk.MenuItem(label=messages.MENU_EXIT)
         quit_item.connect("activate", lambda *_a: self.quit())
         for item in (
             self.status_item,
+            self.stats_item,
             Gtk.SeparatorMenuItem(),
             self.toggle_item,
             folder_item,
@@ -89,196 +177,222 @@ class Tray:
         ):
             self.menu.append(item)
         self.menu.show_all()
+        self.stats_item.hide()
         self._icon = None
         self._indicator = None
         if _use_appindicator():
-            self._indicator = _indicator(self.menu, self._icon_path(False))
+            self._indicator = _indicator(self.menu, self._icon_paths[0])
         if self._indicator is None:
             self._icon = Gtk.StatusIcon()
             self._icon.connect("popup-menu", self._popup)
-            self._icon.connect("activate", lambda *_a: self.toggle())
+            # The Windows double-click: open Settings.
+            self._icon.connect("activate", lambda *_a: self.show_settings())
             self._icon.set_visible(True)
 
     def _popup(self, _icon, button, time) -> None:
         self.menu.popup(None, None, None, None, button, time)
 
-    def _command(self, command: str) -> str:
-        box: dict[str, str] = {}
-
-        def run() -> bool:
-            if command == "TOGGLE":
-                self.toggle()
-            box["reply"] = "RECORDING" if self.capture.is_active else "STOPPED"
-            return False
-
-        # The socket thread must not touch GTK itself.
-        if threading_is_main():
-            run()
-        else:
-            done = __import__("threading").Event()
-
-            def wrapped() -> bool:
-                run()
-                done.set()
-                return False
-
-            GLib.idle_add(wrapped)
-            done.wait(5)
-        return box.get("reply", "STOPPED")
-
-    def start_recording(self, sound: bool = True) -> bool:
-        error = self.capture.start(self.settings, os.environ.get("DISPLAY"))
-        self.refresh()
-        if error:
-            self.notify("Desktop Recorder", error)
-            return False
-        if self.capture.warning:
-            self.notify("Desktop Recorder", self.capture.warning)
-        if sound and self.settings.play_sounds:
-            sounds.play(True)
-        return False
-
-    def stop_recording(self, sound: bool = True) -> None:
-        if not self.capture.is_active:
-            return
-        if sound and self.settings.play_sounds:
-            sounds.play(False)
-        self.capture.stop()
-        self.refresh()
-        if not self.settings.copy_to_clipboard:
-            return
-        files = self.capture.session_files()
-        if not files:
-            return
-        try:
-            copy_files(files)
-            self.notify(
-                "Desktop Recorder",
-                "Video copied. Paste it into a folder or a chat."
-                if len(files) == 1
-                else f"{len(files)} video files copied. Paste them into a folder or a chat.",
-            )
-        except Exception as exc:
-            self.notify("Desktop Recorder", "Could not copy the video: " + str(exc))
-
-    def toggle(self) -> None:
-        if self.capture.is_active:
-            self.stop_recording()
-        else:
-            self.start_recording()
+    def _menu_toggle(self) -> None:
+        # Let the menu close before the selector grabs the keyboard and the mouse.
+        GLib.idle_add(self._toggle_once, "")
 
     def open_folder(self) -> None:
-        os.makedirs(self.settings.folder, exist_ok=True)
-        subprocess.Popen(["xdg-open", self.settings.folder])
-
-    def show_settings(self) -> None:
-        dialog = SettingsDialog(self.settings)
-        if dialog.run() != Gtk.ResponseType.OK:
-            dialog.destroy()
-            return
-        self.settings = dialog.result()
-        dialog.destroy()
+        folder = self.settings.folder
         try:
-            save_settings(self.settings)
-            write_autostart(_command_path(), self.settings.start_on_login)
-        except Exception as exc:
-            self.notify("Desktop Recorder", "Cannot save the settings: " + str(exc))
-        self._install_hotkey()
-        self.refresh()
-        if self.capture.is_active:
-            self.capture.stop()
-            self.start_recording(False)
+            os.makedirs(folder, exist_ok=True)
+            subprocess.Popen(["xdg-open", folder], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except OSError as exc:
+            self.notify(messages.APP_TITLE, (messages.CANNOT_OPEN_FOLDER + str(exc))[:250], 6000)
 
-    def quit(self) -> None:
-        self.stop_recording(False)
-        if self.hotkey is not None:
-            self.hotkey.stop()
-        self.server.stop()
-        if self._icon is not None:
-            self._icon.set_visible(False)
-        Gtk.main_quit()
+    # ------------------------------------------------------------ ControllerUi
 
     def refresh(self) -> None:
-        recording = self.capture.is_active
-        fps = f"{self.settings.fps:.3f}".rstrip("0").rstrip(".")
-        self.status_item.set_label("Recording at " + fps + " fps" if recording else "Not recording")
-        hotkey = ""
-        if self.hotkey is not None and self.hotkey.registered:
-            hotkey = "    " + self.settings.hotkey_text
-        self.toggle_item.set_label(("Stop recording" if recording else "Start recording") + hotkey)
-        tooltip = "Desktop Recorder: recording" if recording else "Desktop Recorder: stopped"
-        path = self._icon_path(recording)
+        if not self.owned:
+            return
+        recording = self.controller.is_recording()
+        self.status_item.set_label(self.controller.status_text())
+        try:
+            stats = self.controller.last_stats_text()
+        except Exception:  # noqa: BLE001
+            stats = messages.LAST_RECORDING_PREFIX + messages.NO_STATS
+        if stats is None:
+            self.stats_item.hide()
+        else:
+            self.stats_item.set_label(stats)
+            self.stats_item.show()
+        label = messages.MENU_STOP if recording else messages.MENU_SELECT
+        if self.hotkey_active:
+            label += messages.MENU_HOTKEY_GAP + self.settings.hotkey_text
+        self.toggle_item.set_label(label)
+        tooltip = messages.TOOLTIP_RECORDING if recording else messages.TOOLTIP_STOPPED
+        path = self._icon_paths[1] if recording else self._icon_paths[0]
         if self._icon is not None:
-            self._icon.set_from_file(path)
+            if os.path.exists(path):
+                self._icon.set_from_file(path)
             self._icon.set_tooltip_text(tooltip)
         if self._indicator is not None:
             self._indicator.set_icon_full(path, tooltip)
+            try:
+                self._indicator.set_title(tooltip)
+            except Exception:  # noqa: BLE001
+                pass
 
-    def _failed(self, message: str) -> None:
-        def show() -> bool:
-            self.refresh()
-            if self.settings.play_sounds:
-                sounds.play(False)
-            self.notify("Desktop Recorder stopped", message[:250])
-            return False
+    def play(self, up: bool) -> None:
+        sounds.play(up)
 
-        GLib.idle_add(show)
+    def present_token(self) -> str:
+        return self.token
 
-    def notify(self, title: str, body: str) -> None:
+    def notify(self, title: str, body: str, timeout_ms: int) -> None:
+        # The stderr line comes first, always (D28). Tests read it.
+        _log(messages.notify_line(title, body))
+        if self._notify_failed:
+            return
         try:
-            gi.require_version("Notify", "0.7")
-            from gi.repository import Notify
+            notify = self._notify_module
+            if notify is None:
+                gi.require_version("Notify", "0.7")
+                from gi.repository import Notify as notify
 
-            if not Notify.is_initted():
-                Notify.init("Desktop Recorder")
-            note = Notify.Notification.new(title, body, None)
+                if not notify.is_initted():
+                    notify.init(messages.APP_TITLE)
+                self._notify_module = notify
+            note = notify.Notification.new(title, body, None)
+            note.set_timeout(int(timeout_ms))
             note.show()
-        except Exception:
-            sys.stderr.write(title + ": " + body + "\n")
+        except (ImportError, ValueError, GLib.Error) as exc:
+            self._notify_failed = True
+            _log(f"Desktop Recorder: notifications are off: {exc}")
+        except Exception as exc:  # noqa: BLE001
+            self._notify_failed = True
+            _log(f"Desktop Recorder: notifications are off: {exc}")
 
-    def _install_hotkey(self) -> None:
+    # ------------------------------------------------------------ socket
+
+    def _command(self, text: str) -> str:
+        """Runs on the main thread (InstanceServer schedule)."""
+        verb, token = parse_command(text)
+        if verb == "TOGGLE" and not self._quitting:
+            if token:
+                self.token = token
+            self.controller.toggle(token)
+        return self.controller.reply_word()
+
+    # ------------------------------------------------------------ hotkey (8.5)
+
+    def _hotkey_pressed(self) -> bool:
+        if not self._quitting:
+            self.controller.toggle("")
+        return False
+
+    def _install_hotkey(self, after_save: bool) -> None:
+        if self._quitting:
+            return
         if self.hotkey is not None:
             self.hotkey.stop()
             self.hotkey = None
-        if capture_backend() == "x11":
-            self.hotkey = X11Hotkey(
+        self.hotkey_active = False
+        if self.backend == "x11":
+            hotkey = X11Hotkey(
                 os.environ.get("DISPLAY"),
                 self.settings.hotkey_modifiers,
                 self.settings.hotkey_key,
-                lambda: GLib.idle_add(self.toggle),
+                lambda: GLib.idle_add(self._hotkey_pressed),
             )
-            if not self.hotkey.start():
-                self.notify(
-                    "Desktop Recorder",
-                    self.settings.hotkey_text + " is used by another program, so the hotkey is off.",
-                )
+            self.hotkey = hotkey
+            if hotkey.start():
+                self.hotkey_active = True
+                return
+            text = messages.hotkey_in_use(self.settings.hotkey_text)
+            self.notify(messages.APP_TITLE, text, HOTKEY_NOTICE_MS)
+            if after_save:
+                self._message(text + messages.HOTKEY_PICK_OTHER)
             return
-        command = _command_path()
+        command = command_path()
         if not command:
-            self.notify("Desktop Recorder", "Install the program to enable the Wayland hotkey.")
+            self.notify(messages.APP_TITLE, messages.WAYLAND_HOTKEY_NEEDS_INSTALL, HOTKEY_NOTICE_MS)
             return
 
         def runner(args):
-            return subprocess.run(args, capture_output=True, text=True, check=False)
+            return subprocess.run(args, capture_output=True, text=True, check=False, timeout=5)
 
-        if not update_gnome_shortcut(
-            self.settings.hotkey_modifiers,
-            self.settings.hotkey_key,
-            command + " --toggle",
-            runner,
-        ):
-            self.notify(
-                "Desktop Recorder",
-                "This Wayland session has no GNOME shortcut setting, so the hotkey is off. Use the tray menu.",
-            )
+        try:
+            ok = update_gnome_shortcut(self.settings.hotkey_modifiers, self.settings.hotkey_key,
+                                       shlex.quote(command) + " --toggle", runner)
+        except Exception:  # noqa: BLE001 - a gsettings timeout
+            ok = False
+        if ok:
+            self.hotkey_active = True
+        else:
+            self.notify(messages.APP_TITLE, messages.WAYLAND_NO_SHORTCUT, HOTKEY_NOTICE_MS)
 
-    def _icon_path(self, recording: bool) -> str:
-        directory = config_dir()
-        os.makedirs(directory, exist_ok=True)
-        path = os.path.join(directory, "icon-on.png" if recording else "icon-off.png")
-        if not os.path.exists(path):
-            _write_icon(path, recording)
-        return path
+    def _message(self, text: str) -> None:
+        if self._quitting:
+            return
+        dialog = Gtk.MessageDialog(
+            message_type=Gtk.MessageType.WARNING,
+            buttons=Gtk.ButtonsType.OK,
+            text=text,
+        )
+        dialog.set_title(messages.APP_TITLE)
+        self._message_dialog = dialog
+        try:
+            dialog.run()
+        finally:
+            self._message_dialog = None
+            dialog.destroy()
+
+    # ------------------------------------------------------------ settings
+
+    def _save_quietly(self, settings: Settings) -> None:
+        """The controller saves the live settings here (region, token, selector options)."""
+        if settings is not self.settings:
+            self.settings = settings
+        save_settings(self.settings)
+
+    def show_settings(self) -> None:
+        if self._dialog is not None:
+            self._dialog.present()
+            return
+        from .settings_dialog import SettingsDialog
+
+        dialog = SettingsDialog(self.settings, self.backend)
+        self._dialog = dialog
+        try:
+            result = dialog.run_until_valid()
+        finally:
+            dialog.destroy()
+            self._dialog = None
+        if self._quitting or result is None:
+            return
+        # Keep values that the controller saved while the dialog was open (region, token).
+        live = self.settings
+        result.region = live.region
+        result.last_region = live.last_region
+        result.wayland_region = tuple(live.wayland_region)
+        result.wayland_restore_token = live.wayland_restore_token
+        self.settings = copy_settings(result)
+        try:
+            save_settings(self.settings)
+            write_autostart(autostart_command(), self.settings.start_on_login)
+        except Exception as exc:  # noqa: BLE001
+            self._message(messages.CANNOT_SAVE_SETTINGS + str(exc))
+        if self._quitting:
+            return
+        # Save never restarts a running recording (D13). New values apply to the next recording.
+        self._install_hotkey(after_save=True)
+        if self._quitting:
+            return
+        self.controller.refresh_audio()
+        self.refresh()
+
+
+def _schedule_on_main(job) -> None:
+    def run_job() -> bool:
+        job()
+        return False
+
+    GLib.idle_add(run_job)
 
 
 def _use_appindicator() -> bool:
@@ -305,220 +419,3 @@ def _indicator(menu, icon_path):
     indicator.set_status(AppIndicator.IndicatorStatus.ACTIVE)
     indicator.set_menu(menu)
     return indicator
-
-
-def _write_icon(path: str, recording: bool) -> None:
-    import cairo
-
-    surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, 32, 32)
-    ctx = cairo.Context(surface)
-    ctx.set_source_rgba(0, 0, 0, 0)
-    ctx.paint()
-    ctx.set_source_rgb(1, 1, 1)
-    ctx.rectangle(1, 3, 30, 21)
-    ctx.rectangle(13, 24, 6, 3)
-    ctx.rectangle(8, 27, 16, 3)
-    ctx.fill()
-    if recording:
-        ctx.set_source_rgb(220 / 255, 30 / 255, 30 / 255)
-    else:
-        ctx.set_source_rgb(110 / 255, 110 / 255, 110 / 255)
-    ctx.rectangle(4, 6, 24, 15)
-    ctx.fill()
-    if recording:
-        ctx.set_source_rgb(1, 1, 1)
-        ctx.arc(16, 13.5, 4, 0, 6.3)
-        ctx.fill()
-    surface.write_to_png(path)
-
-
-def _command_path() -> str:
-    command = os.environ.get("DESKTOP_RECORDER_COMMAND", "")
-    if command and os.path.exists(command.split()[0]):
-        return command
-    local = os.path.expanduser("~/.local/bin/desktop-recorder")
-    if os.path.exists(local):
-        return local
-    return ""
-
-
-def threading_is_main() -> bool:
-    import threading
-
-    return threading.current_thread() is threading.main_thread()
-
-
-class SettingsDialog(Gtk.Dialog):
-    def __init__(self, current: Settings) -> None:
-        super().__init__(title="Desktop Recorder settings")
-        self.set_resizable(False)
-        self.add_button("Cancel", Gtk.ResponseType.CANCEL)
-        self.add_button("Save", Gtk.ResponseType.OK)
-        box = self.get_content_area()
-        grid = Gtk.Grid(column_spacing=8, row_spacing=8, margin=12)
-        box.add(grid)
-        self.folder = Gtk.Entry()
-        self.folder.set_text(current.folder)
-        browse = Gtk.Button(label="Browse...")
-        browse.connect("clicked", self._browse)
-        self.fps = Gtk.SpinButton.new_with_range(0.2, 60, 0.1)
-        self.fps.set_digits(1)
-        self.fps.set_value(current.fps)
-        self.quality = Gtk.ComboBoxText()
-        for name in QUALITY:
-            self.quality.append_text(name)
-        self.quality.set_active(current.quality)
-        self.split = Gtk.SpinButton.new_with_range(0, 1440, 1)
-        self.split.set_digits(0)
-        self.split.set_value(current.split_minutes)
-        self.startup = Gtk.CheckButton(label="Start Desktop Recorder when I log in")
-        self.startup.set_active(current.start_on_login)
-        self.record = Gtk.CheckButton(label="Start recording when Desktop Recorder starts")
-        self.record.set_active(current.record_on_launch)
-        self.copy = Gtk.CheckButton(label="Copy the video to the clipboard when recording stops")
-        self.copy.set_active(current.copy_to_clipboard)
-        self.sound = Gtk.CheckButton(label="Play a sound when recording starts and stops")
-        self.sound.set_active(current.play_sounds)
-        self.audio = Gtk.CheckButton(label="Record system audio (what you hear)")
-        self.audio.set_active(current.record_audio)
-        self.win = Gtk.CheckButton(label="Win")
-        self.ctrl = Gtk.CheckButton(label="Ctrl")
-        self.alt = Gtk.CheckButton(label="Alt")
-        self.shift = Gtk.CheckButton(label="Shift")
-        self.win.set_active(bool(current.hotkey_modifiers & 8))
-        self.ctrl.set_active(bool(current.hotkey_modifiers & 2))
-        self.alt.set_active(bool(current.hotkey_modifiers & 1))
-        self.shift.set_active(bool(current.hotkey_modifiers & 4))
-        self.key = Gtk.ComboBoxText()
-        for char in [chr(code) for code in range(ord("A"), ord("Z") + 1)]:
-            self.key.append_text(char)
-        for digit in "0123456789":
-            self.key.append_text(digit)
-        for number in range(1, 13):
-            self.key.append_text("F" + str(number))
-        if current.hotkey_key not in [self.key.get_active_text()]:
-            # get_active_text is empty until a row is active; search the model instead.
-            pass
-        self._select_key(current.hotkey_key)
-        grid.attach(Gtk.Label(label="Save recordings to:", xalign=0), 0, 0, 2, 1)
-        grid.attach(self.folder, 0, 1, 1, 1)
-        grid.attach(browse, 1, 1, 1, 1)
-        grid.attach(Gtk.Label(label="Frames per second (0.2 to 60):", xalign=0), 0, 2, 1, 1)
-        grid.attach(self.fps, 1, 2, 1, 1)
-        grid.attach(Gtk.Label(label="Quality:", xalign=0), 0, 3, 1, 1)
-        grid.attach(self.quality, 1, 3, 1, 1)
-        grid.attach(Gtk.Label(label="New file every (minutes, 0 = never):", xalign=0), 0, 4, 1, 1)
-        grid.attach(self.split, 1, 4, 1, 1)
-        mods = Gtk.Box(spacing=6)
-        for box_ in (self.win, self.ctrl, self.alt, self.shift, self.key):
-            mods.pack_start(box_, False, False, 0)
-        grid.attach(Gtk.Label(label="Hotkey:", xalign=0), 0, 5, 1, 1)
-        grid.attach(mods, 1, 5, 1, 1)
-        row = 6
-        for widget in (self.startup, self.record, self.copy, self.sound, self.audio):
-            grid.attach(widget, 0, row, 2, 1)
-            row += 1
-        self.show_all()
-        self.current = current
-
-    def _select_key(self, name: str) -> None:
-        model = self.key.get_model()
-        for index, row in enumerate(model):
-            if row[0] == name:
-                self.key.set_active(index)
-                return
-        self.key.append_text(name)
-        self.key.set_active(len(model) - 1)
-
-    def _browse(self, _button) -> None:
-        chooser = Gtk.FileChooserDialog(
-            title="Recordings folder",
-            parent=self,
-            action=Gtk.FileChooserAction.SELECT_FOLDER,
-        )
-        chooser.add_button("Cancel", Gtk.ResponseType.CANCEL)
-        chooser.add_button("Select", Gtk.ResponseType.OK)
-        chooser.set_filename(self.folder.get_text())
-        if chooser.run() == Gtk.ResponseType.OK:
-            self.folder.set_text(chooser.get_filename() or "")
-        chooser.destroy()
-
-    def result(self) -> Settings:
-        modifiers = (
-            (8 if self.win.get_active() else 0)
-            | (2 if self.ctrl.get_active() else 0)
-            | (1 if self.alt.get_active() else 0)
-            | (4 if self.shift.get_active() else 0)
-        )
-        key = self.key.get_active_text() or "D"
-        if parse_key(key) is None or not (modifiers & (1 | 2 | 8) or key.startswith("F")):
-            self.notify_invalid()
-            key = self.current.hotkey_key
-            modifiers = self.current.hotkey_modifiers
-        folder = os.path.abspath(os.path.expanduser(self.folder.get_text().strip().strip('"')))
-        if folder != "/":
-            folder = folder.rstrip("/")
-        updated = Settings(
-            folder=folder,
-            fps=self.fps.get_value(),
-            quality=self.quality.get_active(),
-            split_minutes=int(self.split.get_value()),
-            record_on_launch=self.record.get_active(),
-            copy_to_clipboard=self.copy.get_active(),
-            play_sounds=self.sound.get_active(),
-            hotkey_modifiers=modifiers,
-            hotkey_key=parse_key(key) or key,
-            record_audio=self.audio.get_active(),
-            start_on_login=self.startup.get_active(),
-            wayland_restore_token=self.current.wayland_restore_token,
-            extra_lines=list(self.current.extra_lines),
-        )
-        return updated
-
-    def notify_invalid(self) -> None:
-        message = Gtk.MessageDialog(
-            parent=self,
-            message_type=Gtk.MessageType.WARNING,
-            buttons=Gtk.ButtonsType.OK,
-            text="For the hotkey, tick at least one of Win, Ctrl, Alt and pick a key. Shift alone works only with F1 to F12.",
-        )
-        message.run()
-        message.destroy()
-
-    def do_response(self, response_id: int) -> None:
-        # Keep the dialog from closing when the hotkey is not valid.
-        if response_id == Gtk.ResponseType.OK:
-            modifiers = (
-                (8 if self.win.get_active() else 0)
-                | (2 if self.ctrl.get_active() else 0)
-                | (1 if self.alt.get_active() else 0)
-                | (4 if self.shift.get_active() else 0)
-            )
-            key = self.key.get_active_text() or ""
-            parsed = parse_key(key)
-            valid = parsed is not None and (modifiers & (1 | 2 | 8) or (parsed.startswith("F") and modifiers & 4))
-            if modifiers & (1 | 2 | 8) and parsed:
-                valid = True
-            if not valid:
-                self.notify_invalid()
-                return
-            folder = self.folder.get_text().strip().strip('"')
-            if not os.path.isabs(os.path.expanduser(folder)):
-                self.notify_folder("Give a full folder path, such as /home/you/Recordings.")
-                return
-            try:
-                os.makedirs(os.path.expanduser(folder), exist_ok=True)
-            except OSError as exc:
-                self.notify_folder("Cannot create that folder: " + str(exc))
-                return
-        Gtk.Dialog.do_response(self, response_id)
-
-    def notify_folder(self, text: str) -> None:
-        message = Gtk.MessageDialog(
-            parent=self,
-            message_type=Gtk.MessageType.WARNING,
-            buttons=Gtk.ButtonsType.OK,
-            text=text,
-        )
-        message.run()
-        message.destroy()

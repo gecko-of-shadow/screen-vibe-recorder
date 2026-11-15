@@ -1,219 +1,244 @@
-"""Portal screen cast to ffmpeg, through a GStreamer pipewiresrc."""
+"""GStreamer stream for the Wayland path (DESIGN.md 11.2).
+
+pipewiresrc gives BGRx frames. Each frame goes to a FramePump. The pump writes
+the crop to FFmpeg on its own clock (wayland_pump.py).
+
+GUI module: it needs gi and Gst. It imports gi only inside functions, so the
+module itself imports on any OS.
+"""
 
 from __future__ import annotations
 
-import os
-import queue
-import subprocess
 import threading
-from datetime import datetime
+from typing import Any, Callable
 
-from .ffmpeg_cmd import wayland_ffmpeg_argv, wayland_pipeline
-from .portal import PortalStream
-from .settings import Settings
+from .geometry import Rect
+from .wayland_pump import FramePump, crop_rows, frame_stride, pipeline_description
+
+__all__ = ["GstFrame", "GstStream", "TEXT_NEED_GST", "TEXT_BAD_FRAME", "TEXT_SIZE_CHANGED"]
+
+TEXT_NEED_GST = (
+    "Wayland capture needs GStreamer PipeWire support. Install gir1.2-gstreamer-1.0, "
+    "gstreamer1.0-plugins-base and gstreamer1.0-pipewire. "
+)
+TEXT_BAD_FRAME = "Bad frame from the screen cast."
+TEXT_SIZE_CHANGED = "The shared screen changed size, so the recording stopped."
+TEXT_NO_SINK = "Could not build the screen cast pipeline."
+TEXT_NOT_PLAYING = "The screen cast pipeline did not start."
+
+_gst_module: Any = None
+_glib_module: Any = None
 
 
-class WaylandCapture:
-    def __init__(self) -> None:
+def _gst() -> Any:
+    """Import Gst once. Raises ImportError or ValueError when it is missing."""
+    global _gst_module
+    if _gst_module is None:
+        import gi
+
+        gi.require_version("Gst", "1.0")
+        from gi.repository import Gst
+
+        _gst_module = Gst
+    return _gst_module
+
+
+def _glib() -> Any:
+    global _glib_module
+    if _glib_module is None:
+        import gi
+
+        gi.require_version("GLib", "2.0")
+        from gi.repository import GLib
+
+        _glib_module = GLib
+    return _glib_module
+
+
+def caps_size(sample: Any) -> tuple[int, int] | None:
+    """Width and height from the caps of a sample, or None."""
+    caps = sample.get_caps()
+    if caps is None or caps.get_size() < 1:
+        return None
+    structure = caps.get_structure(0)
+    try:
+        width = int(structure.get_value("width"))
+        height = int(structure.get_value("height"))
+    except (TypeError, ValueError):
+        return None
+    if width <= 0 or height <= 0:
+        return None
+    return width, height
+
+
+class GstFrame:
+    """One frame from appsink. Implements wayland_pump.Frame."""
+
+    def __init__(self, sample: Any, seq: int, stride: int) -> None:
+        size = caps_size(sample)
+        if size is None:
+            raise ValueError(TEXT_BAD_FRAME)
+        self.width, self.height = size
+        self.seq = seq
+        self.stride = stride
+        self._sample = sample
         self._lock = threading.Lock()
-        self._pipeline = None
-        self._proc: subprocess.Popen[bytes] | None = None
-        self._pump: threading.Thread | None = None
-        self._frames: queue.Queue[bytes | None] = queue.Queue(maxsize=2)
-        self._started = False
-        self._folder: str | None = None
-        self._before: list[str] = []
-        self._stream: PortalStream | None = None
-        self.error: str | None = None
+        self._cache_rect: Rect | None = None
+        self._cache: bytes | None = None
+
+    def crop(self, rect: Rect) -> bytes:
+        # A still screen writes the same frame many times: keep the last crop.
+        with self._lock:
+            if self._cache is not None and self._cache_rect == rect:
+                return self._cache
+            buffer = self._sample.get_buffer()
+            data = buffer.extract_dup(0, buffer.get_size())
+            out = crop_rows(data, self.stride, rect)
+            self._cache_rect = rect
+            self._cache = out
+            return out
+
+
+class GstStream:
+    """A GStreamer pipeline that feeds a FramePump.
+
+    on_error is always called on the GLib main thread: errors from the streaming
+    thread go through GLib.idle_add, and bus errors come from the bus watch on the
+    main loop. Each stream reports one error at most.
+    """
+
+    def __init__(self, source: str, pump: FramePump, on_error: Callable[[str], None]) -> None:
+        self.source = source
+        self.pump = pump
+        self.on_error = on_error
+        self._pipeline: Any = None
+        self._sink: Any = None
+        self._bus: Any = None
+        self._handlers: list[tuple[Any, int]] = []
+        self._seq = 0
+        self._size: tuple[int, int] | None = None
+        self._lock = threading.Lock()
+        self._error_sent = False
+        self._stopped = False
 
     @property
-    def active(self) -> bool:
-        return self._started
+    def size(self) -> tuple[int, int] | None:
+        """Frame size of the stream (stream px), after the first frame."""
+        return self._size
 
-    def start(
-        self,
-        stream: PortalStream,
-        settings: Settings,
-        when: datetime,
-        audio_device: str | None,
-        ffmpeg: str = "ffmpeg",
-    ) -> str | None:
-        description = wayland_pipeline(stream.fd, stream.node_id, stream.serial, settings.fps)
+    def start(self) -> str | None:
         try:
-            import gi
-
-            gi.require_version("Gst", "1.0")
-            from gi.repository import Gst
+            Gst = _gst()
+            _glib()  # import GLib here, not first on the streaming thread
         except (ImportError, ValueError) as exc:
-            return (
-                "Wayland capture needs GStreamer PipeWire support. "
-                "Install gstreamer1.0-plugins-base and gstreamer1.0-pipewire. "
-                + str(exc)
-            )
-        Gst.init(None)
-        pipeline = Gst.parse_launch(description)
+            return TEXT_NEED_GST + str(exc)
+        try:
+            Gst.init(None)
+            pipeline = Gst.parse_launch(pipeline_description(self.source))
+        except Exception as exc:  # noqa: BLE001 - GLib.Error from the parser
+            return str(exc) or TEXT_NO_SINK
         sink = pipeline.get_by_name("sink")
         if sink is None:
-            return "Could not build the PipeWire capture pipeline."
-        self._stream = stream
-        self._folder = settings.folder
-        self._before = _snapshot(settings.folder)
-
-        def on_sample(element):
-            sample = element.emit("pull-sample")
-            if sample is None:
-                return Gst.FlowReturn.OK
-            caps = sample.get_caps()
-            if caps is None or caps.get_size() < 1:
-                return Gst.FlowReturn.OK
-            structure = caps.get_structure(0)
-            width = int(structure.get_value("width"))
-            height = int(structure.get_value("height"))
-            buffer = sample.get_buffer()
-            ok, info = buffer.map(Gst.MapFlags.READ)
-            if not ok:
-                return Gst.FlowReturn.OK
-            try:
-                payload = bytes(info.data)
-            finally:
-                buffer.unmap(info)
-            self._ensure_encoder(settings, when, width, height, audio_device, ffmpeg, payload)
-            return Gst.FlowReturn.OK
-
-        sink.connect("new-sample", on_sample)
-        bus = pipeline.get_bus()
-        bus.add_signal_watch()
-
-        def on_message(_bus, message):
-            if message.type == Gst.MessageType.ERROR:
-                err, _debug = message.parse_error()
-                self.error = str(err)
-                self.stop()
-
-        bus.connect("message", on_message)
-        pipeline.set_state(Gst.State.PLAYING)
+            pipeline.set_state(Gst.State.NULL)
+            return TEXT_NO_SINK
         self._pipeline = pipeline
-        self._started = True
+        self._sink = sink
+        self._handlers.append((sink, sink.connect("new-sample", self._on_sample)))
+        bus = pipeline.get_bus()
+        if bus is not None:
+            bus.add_signal_watch()
+            self._bus = bus
+            self._handlers.append((bus, bus.connect("message::error", self._on_bus_error)))
+        result = pipeline.set_state(Gst.State.PLAYING)
+        if result == Gst.StateChangeReturn.FAILURE:
+            self.stop()
+            return TEXT_NOT_PLAYING
         return None
 
-    def _ensure_encoder(
-        self,
-        settings: Settings,
-        when: datetime,
-        width: int,
-        height: int,
-        audio_device: str | None,
-        ffmpeg: str,
-        first_frame: bytes,
-    ) -> None:
-        with self._lock:
-            if self._proc is not None:
-                self._offer(first_frame)
-                return
-            if width < 2 or height < 2:
-                self.error = "The shared screen has no picture yet."
-                return
-            os.makedirs(settings.folder, exist_ok=True)
-            argv = wayland_ffmpeg_argv(settings, when, width, height, audio_device, ffmpeg)
-            self._proc = subprocess.Popen(
-                argv,
-                stdin=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                stdout=subprocess.DEVNULL,
-            )
-            self._pump = threading.Thread(target=self._write_frames, name="wayland-frames", daemon=True)
-            self._pump.start()
-            self._offer(first_frame)
-
-    def _offer(self, payload: bytes) -> None:
-        try:
-            self._frames.put(payload, timeout=0.05)
-        except queue.Full:
-            return
-
-    def _write_frames(self) -> None:
-        proc = self._proc
-        if proc is None or proc.stdin is None:
-            return
-        while True:
-            item = self._frames.get()
-            if item is None:
-                break
-            try:
-                proc.stdin.write(item)
-            except Exception:
-                break
-        try:
-            proc.stdin.close()
-        except Exception:
-            pass
-
     def stop(self) -> None:
+        """Main thread. Set the pipeline to NULL. Safe to call more than once."""
+        self._stopped = True
         pipeline = self._pipeline
         self._pipeline = None
+        for obj, handler_id in self._handlers:
+            try:
+                obj.disconnect(handler_id)
+            except Exception:  # noqa: BLE001
+                pass
+        self._handlers = []
+        if self._bus is not None:
+            try:
+                self._bus.remove_signal_watch()
+            except Exception:  # noqa: BLE001
+                pass
+            self._bus = None
+        self._sink = None
         if pipeline is not None:
             try:
-                import gi
-
-                gi.require_version("Gst", "1.0")
-                from gi.repository import Gst
-
-                pipeline.set_state(Gst.State.NULL)
-            except Exception:
+                pipeline.set_state(_gst().State.NULL)
+            except Exception:  # noqa: BLE001
                 pass
-        while True:
-            try:
-                self._frames.get_nowait()
-            except queue.Empty:
-                break
+
+    # ------------------------------------------------------------ callbacks
+
+    def _on_sample(self, sink: Any) -> Any:
+        """Streaming thread. Never blocks: pull the sample and give it to the pump."""
+        Gst = _gst()
+        sample = sink.emit("pull-sample")
+        if sample is None or self._stopped:
+            return Gst.FlowReturn.OK
+        buffer = sample.get_buffer()
+        size = caps_size(sample)
+        if buffer is None or size is None:
+            self._error_from_thread(TEXT_BAD_FRAME)
+            return Gst.FlowReturn.OK
+        width, height = size
+        with self._lock:
+            if self._size is None:
+                self._size = size  # the first frame sets the size of the stream
+            changed = self._size != size
+        if changed:
+            self._error_from_thread(TEXT_SIZE_CHANGED)
+            return Gst.FlowReturn.OK
+        stride = frame_stride(buffer.get_size(), width, height)
+        if stride is None:
+            self._error_from_thread(TEXT_BAD_FRAME)
+            return Gst.FlowReturn.OK
+        with self._lock:
+            self._seq += 1
+            seq = self._seq
+        self.pump.offer(GstFrame(sample, seq, stride))
+        return Gst.FlowReturn.OK
+
+    def _on_bus_error(self, _bus: Any, message: Any) -> None:
+        """Main thread (bus signal watch)."""
         try:
-            self._frames.put_nowait(None)
-        except queue.Full:
+            err, _debug = message.parse_error()
+            text = str(err.message if hasattr(err, "message") else err)
+        except Exception as exc:  # noqa: BLE001
+            text = str(exc)
+        self._send_error(text or "GStreamer error.")
+
+    def _error_from_thread(self, text: str) -> None:
+        with self._lock:
+            if self._error_sent:
+                return
+            self._error_sent = True
+
+        def deliver() -> bool:
+            if self.on_error is not None:
+                self.on_error(text)
+            return False
+
+        try:
+            _glib().idle_add(deliver)
+        except Exception:  # noqa: BLE001 - no GLib: nothing can show the error
             pass
-        if self._pump is not None:
-            self._pump.join(5)
-        proc = self._proc
-        self._proc = None
-        if proc is not None:
-            try:
-                proc.wait(timeout=8)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                proc.wait(timeout=5)
-        stream = self._stream
-        self._stream = None
-        if stream is not None:
-            try:
-                os.close(stream.fd)
-            except OSError:
-                pass
-        self._started = False
 
-    def session_files(self) -> list[str]:
-        if not self._folder or not os.path.isdir(self._folder):
-            return []
-        skip = {os.path.normcase(path) for path in self._before}
-        found = []
-        for name in os.listdir(self._folder):
-            if not (name.startswith("desktop_") and name.endswith(".mp4")):
-                continue
-            path = os.path.join(self._folder, name)
-            if os.path.normcase(path) in skip:
-                continue
-            try:
-                if os.path.getsize(path) > 0:
-                    found.append(path)
-            except OSError:
-                continue
-        found.sort(key=lambda path: path.lower())
-        return found
-
-
-def _snapshot(folder: str) -> list[str]:
-    if not os.path.isdir(folder):
-        return []
-    return [
-        os.path.join(folder, name)
-        for name in os.listdir(folder)
-        if name.startswith("desktop_") and name.endswith(".mp4")
-    ]
+    def _send_error(self, text: str) -> None:
+        with self._lock:
+            if self._error_sent:
+                return
+            self._error_sent = True
+        if self.on_error is not None:
+            self.on_error(text)

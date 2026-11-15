@@ -32,6 +32,15 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+      - name: Install Ubuntu 24.04 packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg python3-gi python3-xlib
+      - name: Unit tests
+        run: |
+          env -u DISPLAY PYTHONPATH=linux python3 -m unittest discover -s tests -p 'test_linux*.py' -v
+          PYTHONPATH=linux python3 -m unittest discover -s tests -p 'test_pdeathsig.py' -v
+          PYTHONPATH=linux python3 -m unittest discover -s tests -p 'test_gst_pipeline.py' -v
       - name: Portable archive
         run: |
           ver="${GITHUB_REF_NAME#v}"
@@ -42,6 +51,7 @@ jobs:
           stage=$(mktemp -d)
           tar -C "$stage" -xzf dist/*.tar.gz
           "$stage"/desktop-recorder-*/desktop-recorder --help
+          "$stage"/desktop-recorder-*/desktop-recorder --check
       - uses: actions/upload-artifact@v4
         with:
           name: linux-portable
