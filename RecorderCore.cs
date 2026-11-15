@@ -180,7 +180,9 @@ static class RecorderCore
     // The CQ for one quality level. NvencCq is the "Balanced" value.
     // "Smallest" and "Sharpest" use the same steps as the x264 CRF ladder (32/27/21 = +5/-6),
     // so the three levels keep the spacing of the old app and of the Grok test (HANDOFF 3.1).
-    // With the default 23 the result is 28 / 23 / 17. Phase B (B9 to B11) must tune it. UNVERIFIED.
+    // With the default 23 the result is 28 / 23 / 17. Phase B ran these three values (HANDOFF 6.8, B9, B3 and B11).
+    // With one read for each run, the data did not show a quality effect. The decision about the
+    // default is put off until more reads are done (HANDOFF 5, decision 11).
     public static int NvencCqForQuality(int baseCq, int quality)
     {
         int q = ClampQuality(quality);
@@ -907,7 +909,11 @@ static class RecorderCore
             // Bran's PC). With max = ceil(fps) - 1, the file keeps one frame each second at least,
             // so the length of the file is correct to 1 s.
             int maxDrop = Math.Max(1, (int)Math.Ceiling(fps) - 1);
-            vf.Add("mpdecimate=max=" + maxDrop.ToString(CultureInfo.InvariantCulture));
+            // hi=256, lo=128 (defaults 768, 320): the defaults dropped one-character look-alike changes
+            // (x.y to x,y, a:b to a;b, a'b to a`b) when the change stayed less than 1 s, and caught a longer
+            // change up to 0.7 s late. The lower values caught 15 of 15 changes at once, with the same frame
+            // count on a still page (test/lookalike.py, HANDOFF 6.10).
+            vf.Add("mpdecimate=hi=256:lo=128:frac=0.33:max=" + maxDrop.ToString(CultureInfo.InvariantCulture));
         }
         if (vf.Count > 0)
         {
@@ -941,7 +947,9 @@ static class RecorderCore
                 // RGB input (gdigrab, or ddagrab frames that stay on the GPU): NVENC converts
                 // RGB to YUV itself, and its default is 4:2:0. rgb_mode=yuv444 keeps 4:4:4 on the GPU,
                 // so no hwdownload is necessary. In "changes" mode the input is yuv444p already.
-                // UNVERIFIED: no 4:4:4 encode ran on Bran's PC yet (option checked in the help text only).
+                // Checked on Bran's PC (HANDOFF 6.7, runs dda444 and gdi444, fixed fps): this encode
+                // gave High 4:4:4 / yuv444p and lost no frames. Phase B run B8 (HANDOFF 6.8) also used it.
+                // Not checked: 4:4:4 in "changes" mode (the path without -rgb_mode). No run in 6.7 or 6.8 used it.
                 if (!changes)
                 {
                     a.Add("-rgb_mode");

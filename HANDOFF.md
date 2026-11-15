@@ -451,6 +451,28 @@ Test: 10 s, 10 fps, ddagrab + h264_nvenc CQ 23, region 1120x892, still screen. A
 
 Not checked: the check box with a real click; the new build in Bran's tray (the running app locked `DesktopRecorder.exe`).
 
+### 6.10 Look-alike changes in "Changes only" mode (run on Bran's PC on 2026-11-14)
+
+Reason: the "Export frames" design note (`docs/export-frames.md`) found that default `mpdecimate` dropped 4 of 15 one-character look-alike changes. The app used default `mpdecimate` (hi=768, lo=320, frac=0.33) in "Changes only" mode.
+
+Method (offline, so each kept frame has a known state): `test/lookalike_render.cs` draws 15 states of a 1120x892 page with GDI+ ClearType text (Consolas). Only one item changes between states: `x.y`, `x,y`, `O`, `0`, `l`, `1`, `I`, `rn`, `m`, `a:b`, `a;b`, `a'b`, ``a`b``, `-`, `_`. `test/lookalike.py` shows each state for a hold time, samples at 10 fps, and runs the app chain: `format=bgra,format=yuv420p,mpdecimate=...:max=9`. showinfo gives the time of each kept frame.
+
+| Filter | 13 px light | 13 px dark | 16 px light and dark |
+|---|---|---|---|
+| Default, hold 100 to 500 ms | 14/15 (lost `x.y`>`x,y`) | 12/15 (lost `x.y`>`x,y`, `a:b`>`a;b`, `a'b`>``a`b``) | 15/15 |
+| Default, hold 700 to 1700 ms | 15/15, up to 0.7 s late (caught by the forced frame of `max=9`) | 15/15, up to 0.7 s late | 15/15, at once |
+| `hi=256:lo=128:frac=0.33`, all holds | 15/15, at once | 15/15, at once | 15/15, at once |
+
+- Holds of exactly 1000 ms are not valid. The forced frame falls on each change (10 frames), so the default looked perfect. Use holds that are not multiples of 1 s.
+- `hi=128:lo=64` gave the same result as `hi=256:lo=128`.
+- Frame count: the new filter kept the same number of frames as the default, or 1 to 3 more (each extra frame is a change that the default dropped). A still page still keeps 1 frame each second (`max`).
+
+Change: the app now uses `mpdecimate=hi=256:lo=128:frac=0.33:max=ceil(fps)-1`. Unit tests updated and pass.
+
+App check (`test/app_runs.ps1`, `counter.html`, region 20,120,1880x860, 10 fps, new build): ddachg 104 of 104 values, PASS, 0.464 MB. gdichg 99 of 99, PASS, 0.448 MB. The FFmpeg command in `summary_6_10.json` has the new filter.
+
+Not checked: look-alike changes in a real screen capture (the states were drawn offline, not captured); the file size of a long still recording with the new filter (the offline test shows the same frame count); fps other than 10.
+
 ## 7. Tracker
 
 | Item | Status |
@@ -471,6 +493,8 @@ Not checked: the check box with a real click; the new build in Bran's tray (the 
 | libx264 fallback in the app | Bran: "seems ok" (2026-11-14). Not run. Still UNVERIFIED. |
 | Default fps 10 | Done (decision 10). Unit tests pass. |
 | Release v2.0.0 | Done (7.2). |
+| Look-alike changes in "Changes only" (6.10) | Done. Lower `mpdecimate` thresholds. Offline test 15/15. App runs PASS. Released in v2.0.1. |
+| Release v2.0.1 | Done (7.3). |
 
 ### 7.1 Later and future work (Bran, 2026-11-14)
 
@@ -481,7 +505,7 @@ Not checked: the check box with a real click; the new build in Bran's tray (the 
 - Not now: multi-monitor PCs and monitors with different scales.
 - Future: a PC without an NVIDIA GPU.
 - New session: idea to explore, an "Export frames" feature (unique frames as PNG) for AI tools that sample a video at 1 fps (for example Gemini).
-- New session: correct the stale comment in `RecorderCore.cs` that says no 4:4:4 encode ran (6.7 shows it ran).
+- Done (2026-11-14): correct the stale comment in `RecorderCore.cs` that says no 4:4:4 encode ran (6.7 shows it ran). Also corrected: the comments on `NvencCqForQuality` (Phase B result), `RecordingFrame.cs` (WDA_EXCLUDEFROMCAPTURE checked) and the Settings dialog in `DesktopRecorder.cs` (125% checked). Comments only, no code change.
 
 ### 7.2 Release v2.0.0
 
@@ -493,6 +517,15 @@ Done on 2026-11-14. https://github.com/gecko-of-shadow/desktop-recorder/releases
 - The Windows zip of v2.0.0 was built on Bran's PC from the tagged source (`csc.exe`, same options as the workflow) with the fixed script. The Linux archive is the artifact of the release run. Both are attached. The downloaded zip has the same SHA-256 as the local zip.
 - `git tag -F` removed the `##` heading lines from the tag message. The release notes come from a file (`gh release create --notes-file`).
 - Not checked: the v2.0.0 zip on a second PC.
+
+### 7.3 Release v2.0.1
+
+Done on 2026-11-14. https://github.com/gecko-of-shadow/desktop-recorder/releases/tag/v2.0.1
+
+- Tag v2.0.1 = a7c8144 (6.10 filter fix, merged side-session commits, version 2.0.1). Build workflow on `main` passed.
+- The Release workflow passed in full (windows, linux, publish). The fixed `make-windows-zip.sh` works on the GitHub runner.
+- Both archives downloaded and checked: each has the 2.0.1 README.
+- Workflow limit: the release body was the commit message, not the tag message. `actions/checkout` does not fetch the annotated tag object, so `git tag -l --format=%(contents)` gives the commit text. The notes were set after with `gh release edit --notes-file`. Do the same for the next release, or fix `release.yml` (for example `fetch-tags: true` or `git fetch --force origin "refs/tags/$tag:refs/tags/$tag"`). Not changed.
 
 Mark an item "checked" only after a run on Bran's PC. Mark all other claims UNVERIFIED.
 
