@@ -66,7 +66,11 @@ from desktop_recorder.wayland_pump import FramePump  # noqa: E402
 
 FPS = 10.0
 LIVE_SOURCE = "videotestsrc is-live=true pattern=smpte ! video/x-raw,width=640,height=480,framerate=30/1"
-STILL_SOURCE = "videotestsrc num-buffers=1 pattern=smpte ! video/x-raw,width=640,height=480,framerate=30/1"
+# A still screen: PipeWire sends no new buffer and no EOS. A live source at 1 frame
+# each 100 s gives one buffer in the test time and no EOS.
+STILL_SOURCE = "videotestsrc is-live=true pattern=smpte ! video/x-raw,width=640,height=480,framerate=1/100"
+# A source that ends: one buffer, then EOS (like a PipeWire node that goes away).
+ENDING_SOURCE = "videotestsrc num-buffers=1 pattern=smpte ! video/x-raw,width=640,height=480,framerate=30/1"
 CROP = Rect(10, 10, 320, 240)
 
 
@@ -189,6 +193,18 @@ class GstPipelineTests(unittest.TestCase):
         _w, _h, frames, duration = self.probe(path)
         self.assertLessEqual(frames, 6)
         self.assertGreaterEqual(duration, 1.8)
+
+    def test_eos_reports_cast_ended(self) -> None:
+        from desktop_recorder import messages
+        pump = FramePump(FPS)
+        self.addCleanup(pump.stop)
+        stream = GstStream(ENDING_SOURCE, pump, self.errors.append)
+        self.assertIsNone(stream.start())
+        self.addCleanup(stream.stop)
+        end = time.monotonic() + 5
+        while not self.errors and time.monotonic() < end:
+            self.spin(0.05)
+        self.assertEqual(self.errors, [messages.CAST_ENDED])
 
 
 if __name__ == "__main__":
