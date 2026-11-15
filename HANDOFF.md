@@ -25,7 +25,7 @@ A test proves points 2 to 4. Section 6 gives the test.
 
 - C# WinForms on .NET Framework 4. `build.cmd` compiles it with the `csc.exe` that ships with Windows. No NuGet packages.
 - Files: `DesktopRecorder.cs` (UI and tray), `RecorderCore.cs` (settings and FFmpeg arguments), `RecordingSession.cs` (FFmpeg process), `tests/CoreTests.cs`.
-- A Linux port is in `linux/` (Python, GTK). Do not change the Linux port in this task.
+- A Linux port is in `linux/` (Python, GTK). Bran asked for the full port on 2026-11-14 (decision 13, section 6.11).
 - `RecorderCore.BuildWindowsArguments` builds this FFmpeg command:
   - Capture: `gdigrab`, input `desktop`. It records all monitors as one picture. It has no region option.
   - Encoder: `libx264`, `-preset medium`, `-tune stillimage`, `-pix_fmt yuv420p`.
@@ -148,7 +148,7 @@ Other rules:
 
 1. Platform: stay on .NET Framework 4 with `csc.exe` and `build.cmd`. No NuGet. No .NET 8.
 2. Window selection: version 1 records the fixed rectangle only. The recording does not follow a window that moves.
-3. Default frame-rate mode: "Changes only" (Bran decided after Phase B, 2026-11-14). Code default changed; Bran's settings file set to `frame_rate_mode=changes`. The Linux port keeps its own default (not changed in this task).
+3. Default frame-rate mode: "Changes only" (Bran decided after Phase B, 2026-11-14). Code default changed; Bran's settings file set to `frame_rate_mode=changes`. The Linux port has the same default since the port (decision 13).
 4. Start flow (GUI test, 2026-11-14): Win+Shift+D, drag a box, release the mouse. The recording starts at once. No Enter.
 5. Stop: the same hotkey (Win+Shift+D) stops. No separate stop hotkey.
 6. Remove the "record last region" feature (hotkey, tray item, settings row). Bran does not use it.
@@ -158,6 +158,7 @@ Other rules:
 10. Default frame rate: 10 fps (was 2). Bran decided on 2026-11-14. Reason: the 6.8 rule needs 2.3 fps for 1000 CSS px/s at 125% in an 892 px area. 10 fps is safe up to about 4400 CSS px/s. Bran's settings file already had `fps=10`.
 11. Quality default: keep Balanced (CQ 23). More reads of B3, B9 and B11 are put off to a later date (Bran, 2026-11-14).
 12. Release: push `test-kit`, merge it into `main`, publish v2.0.0 (Bran, 2026-11-14). The version is 2.0.0 because the hotkey now opens the selector, not a full-desktop recording.
+13. Ubuntu port (Bran, 2026-11-14): port all new features to the Linux app for Ubuntu Desktop 24.04. Test it on GitHub Actions in a new public repo, `gecko-of-shadow/screen-vibe-recorder`, branch `linux-port`. Linux version: 2.1.0.
 
 ---
 
@@ -473,6 +474,34 @@ App check (`test/app_runs.ps1`, `counter.html`, region 20,120,1880x860, 10 fps, 
 
 Not checked: look-alike changes in a real screen capture (the states were drawn offline, not captured); the file size of a long still recording with the new filter (the offline test shows the same frame count); fps other than 10.
 
+### 6.11 Ubuntu 24.04 port (GitHub Actions, 2026-11-15)
+
+Setup: repo `gecko-of-shadow/screen-vibe-recorder`, branch `linux-port`. The `linux` job of `build.yml` runs on `ubuntu-24.04` (FFmpeg 6.1.1-3ubuntu5). GUI tests run under `dbus-run-session` and `xvfb-run` (1280x800). `DESKTOP_RECORDER_REQUIRE_GUI=1` makes a missing dependency fail a test, not skip it. Design and review notes: `linux/design/`.
+
+Result (checked in CI, 3 runs in a row, all pass, 0 skips):
+
+- Unit tests: 156 pass (settings, argv, encoders, stats, selector model, geometry, Wayland pump, portal, window list, single instance, launch path).
+- `test_pdeathsig`: FFmpeg ends when its parent ends.
+- `test_gst_pipeline` (3 tests): the GStreamer path to FFmpeg, without a portal.
+- Mono core tests (Windows rules): pass.
+- GUI tests on Xvfb (16): drag records the region (size 200x150, pattern pixels, no border in the video, border outside the region on the screen), window click, Esc, Space in "Changes only" mode, edge region (no border side, Stop button below), Stop button click, hotkey, `--toggle` replies, `--toggle` with no tray, record on launch, x264 fallback, kill of the app ends FFmpeg, selector dim and magnifier, hotkey repeat, smoke recording.
+
+Bugs found by CI and fixed:
+
+| # | Bug | Fix |
+|---|---|---|
+| L1 | A recording shorter than about 2 s had 0 frames. FFmpeg 6.1 probed about 2 s of x11grab input before it encoded, and a `q` in that time ended FFmpeg with nothing. | Input options `-fpsprobesize 0 -probesize 32 -analyzeduration 0` on x11grab and rawvideo. Debug run: 0.5 s gave 6 frames, 1.2 s gave 12. |
+| L2 | A held hotkey fired twice. During the grab, X11 also sends the release of Ctrl. The filter took it as the release of the hotkey key. | The filter uses only events with the hotkey keycode. Found with an event log in CI. |
+
+UNVERIFIED (no run on a real Ubuntu desktop):
+
+- GNOME Wayland: the portal, the selector on a stream frame, the crop, the experimental border, the GNOME custom shortcut.
+- NVENC on Linux (CI has no GPU; all CI runs use libx264).
+- The real tray (AppIndicator), notifications, sounds, clipboard paste in Nautilus, HiDPI scale, multi-monitor.
+- Audio capture.
+
+Not checked: the Windows app with short gdigrab or ddagrab recordings. L1 can also apply to FFmpeg on Windows. 6.7 has no run shorter than 2 s.
+
 ## 7. Tracker
 
 | Item | Status |
@@ -495,6 +524,7 @@ Not checked: look-alike changes in a real screen capture (the states were drawn 
 | Release v2.0.0 | Done (7.2). |
 | Look-alike changes in "Changes only" (6.10) | Done. Lower `mpdecimate` thresholds. Offline test 15/15. App runs PASS. Released in v2.0.1. |
 | Release v2.0.1 | Done (7.3). |
+| Ubuntu 24.04 port (6.11) | Done on branch `linux-port` of `gecko-of-shadow/screen-vibe-recorder`. CI on ubuntu-24.04 passes (X11 on Xvfb). Real GNOME desktop, Wayland and NVENC: UNVERIFIED. Not merged and not released. |
 
 ### 7.1 Later and future work (Bran, 2026-11-14)
 
@@ -539,7 +569,7 @@ Mark an item "checked" only after a run on Bran's PC. Mark all other claims UNVE
 - Never write a token or password in output. Use a placeholder.
 - Do not weaken Windows security. Do not suggest turning off Defender or Controlled Folder Access.
 - Write commit messages from a file, in STE100.
-- Keep the Linux port working. Do not change files in `linux/`.
+- Keep the Linux port working. Run the `linux` CI job after each change in `linux/` or `tests/`.
 
 ---
 

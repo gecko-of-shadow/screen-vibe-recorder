@@ -11,7 +11,7 @@ Download a portable archive from the [Releases page](../../releases/latest). Unz
 - Windows: `desktop-recorder-<version>-windows-x64.zip`. Start `DesktopRecorder.exe`.
 - Ubuntu 24.04: `desktop-recorder-<version>-linux-x86_64.tar.gz`. Run `./desktop-recorder`. The README in the archive lists the apt packages it still needs (GTK, GStreamer, ffmpeg, and the Python GI bindings).
 
-Version 2.0.0 and later have the region selector. Version 1.0.0 records the full desktop. The Ubuntu program did not change in version 2.0.0.
+Version 2.0.0 and later have the region selector on Windows. Version 2.1.0 adds it to the Ubuntu program. Version 1.0.0 records the full desktop.
 
 Install ffmpeg, if you do not have it. It is not inside the archive. The GPU capture (`ddagrab`) needs a recent ffmpeg build. The test used the gyan.dev full build of 2026-04-30. In PowerShell:
 
@@ -163,7 +163,7 @@ The test kit is in `test/`: a source text, an auto-scroll page, a frame-counter 
 - The MP4 stays playable if the PC loses power during a recording. You lose about the last 5 seconds at the default settings, and more at a very low frame rate.
 - If the program stops without a normal stop (for example, a crash), ffmpeg stops with it. A file shorter than 2 seconds can then be unreadable.
 - Hide the mouse pointer when the screen is mostly still and you move the mouse. In "Changes only" mode, each pointer move otherwise adds a frame. Hover effects in other programs (button colors, tooltips) still add frames.
-- On Ubuntu with X11, the whole X display is recorded. On Wayland, Ubuntu asks which screen to share, and the recorder keeps the first screen that you select. The Ubuntu program has no region selector.
+- On Ubuntu, the region selector works on X11 and on Wayland. On Wayland, Ubuntu first asks which screen to share. The selector cannot detect windows on Wayland. See "Ubuntu Desktop 24.04".
 
 ## Problems
 
