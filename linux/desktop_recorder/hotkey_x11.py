@@ -71,11 +71,17 @@ class _XKeyEvent(ctypes.Structure):
         ("root", ctypes.c_ulong),
         ("subwindow", ctypes.c_ulong),
         ("time", ctypes.c_ulong),
+        ("x", ctypes.c_int),
+        ("y", ctypes.c_int),
+        ("x_root", ctypes.c_int),
+        ("y_root", ctypes.c_int),
+        ("state", ctypes.c_uint),
+        ("keycode", ctypes.c_uint),
     ]
 
 
-def _event_time(event: _XEvent) -> int:
-    return int(ctypes.cast(ctypes.byref(event), ctypes.POINTER(_XKeyEvent)).contents.time)
+def _key_event(event: _XEvent) -> _XKeyEvent:
+    return ctypes.cast(ctypes.byref(event), ctypes.POINTER(_XKeyEvent)).contents
 
 
 def x_modifiers(modifiers: int) -> int:
@@ -220,7 +226,14 @@ class X11Hotkey:
                     continue
                 while lib.XPending(display):
                     lib.XNextEvent(display, ctypes.byref(event))
-                    if event.type in (KeyPress, KeyRelease) and self._filter.event(event.type, _event_time(event)):
+                    if event.type not in (KeyPress, KeyRelease):
+                        continue
+                    key = _key_event(event)
+                    # While the grab is active, X11 also sends the other keys (for example
+                    # the release of Ctrl). Only the hotkey key may change the filter.
+                    if key.keycode != keycode:
+                        continue
+                    if self._filter.event(event.type, int(key.time)):
                         try:
                             self._callback()
                         except Exception:  # noqa: BLE001
