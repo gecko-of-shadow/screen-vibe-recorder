@@ -478,13 +478,14 @@ Not checked: look-alike changes in a real screen capture (the states were drawn 
 
 Setup: repo `gecko-of-shadow/screen-vibe-recorder`, branch `linux-port`. The `linux` job of `build.yml` runs on `ubuntu-24.04` (FFmpeg 6.1.1-3ubuntu5). GUI tests run under `dbus-run-session` and `xvfb-run` (1280x800). `DESKTOP_RECORDER_REQUIRE_GUI=1` makes a missing dependency fail a test, not skip it. Design and review notes: `linux/design/`.
 
-Result (checked in CI, 3 runs in a row, all pass, 0 skips):
+Result (checked in CI on commit after 6.11 bug L6, 3 runs in a row, all pass, 0 skips):
 
-- Unit tests: 156 pass (settings, argv, encoders, stats, selector model, geometry, Wayland pump, portal, window list, single instance, launch path).
+- Unit tests: 176 pass (settings, argv, encoders, stats, selector model, geometry, Wayland pump, portal, Wayland controller flow with a fake `gi`, window list, single instance, launch path).
 - `test_pdeathsig`: FFmpeg ends when its parent ends.
-- `test_gst_pipeline` (3 tests): the GStreamer path to FFmpeg, without a portal.
+- `test_gst_pipeline` (4 tests): the GStreamer path to FFmpeg, without a portal. A still source keeps the file length. EOS stops the recording.
 - Mono core tests (Windows rules): pass.
-- GUI tests on Xvfb (16): drag records the region (size 200x150, pattern pixels, no border in the video, border outside the region on the screen), window click, Esc, Space in "Changes only" mode, edge region (no border side, Stop button below), Stop button click, hotkey, `--toggle` replies, `--toggle` with no tray, record on launch, x264 fallback, kill of the app ends FFmpeg, selector dim and magnifier, hotkey repeat, smoke recording.
+- Job `tarball`: only the user apt line from `packaging/linux/README.txt`, the real archive from `make-linux-tarball.sh`, then `--help`, `--check` and `--smoke 1.2` from the unpacked folder.
+- GUI tests on Xvfb (35). New since the first run (19): the Settings dialog (values, validation texts, Cancel, Exit), the Wayland selector shell with a synthetic frame (drag, scale 2, letterbox, Esc, right-click, Space, arrow keys), arrow keys in the X11 selector, and the tray menu (rows, toggle item, Settings item with a new hotkey, Exit while Settings is open). First 16: drag records the region (size 200x150, pattern pixels, no border in the video, border outside the region on the screen), window click, Esc, Space in "Changes only" mode, edge region (no border side, Stop button below), Stop button click, hotkey, `--toggle` replies, `--toggle` with no tray, record on launch, x264 fallback, kill of the app ends FFmpeg, selector dim and magnifier, hotkey repeat, smoke recording.
 
 Bugs found by CI and fixed:
 
@@ -492,6 +493,10 @@ Bugs found by CI and fixed:
 |---|---|---|
 | L1 | A recording shorter than about 2 s had 0 frames. FFmpeg 6.1 probed about 2 s of x11grab input before it encoded, and a `q` in that time ended FFmpeg with nothing. | Input options `-fpsprobesize 0 -probesize 32 -analyzeduration 0` on x11grab and rawvideo. Debug run: 0.5 s gave 6 frames, 1.2 s gave 12. |
 | L2 | A held hotkey fired twice. During the grab, X11 also sends the release of Ctrl. The filter took it as the release of the hotkey key. | The filter uses only events with the hotkey keycode. Found with an event log in CI. |
+| L3 | Wayland: when the screen cast ended without an error (EOS, or the portal session closed), the recording kept a frozen picture. | Stop on EOS and on the portal `Closed` signal. Found by a second review. EOS checked in CI; `Closed` not checked. |
+| L4 | Wayland: a stream error before the recording started was only logged. A later start on that stream recorded a frozen picture. | The stream is marked failed. A start on it shows the error. Unit test with a fake `gi`. |
+| L5 | Exit during the portal dialog waited up to 120 s. | The nested loop is cancelled. Unit test with a fake loop. |
+| L6 | Smaller: a busy loop in the pump below 0.5 fps; a gsettings parse failure deleted the other GNOME shortcuts; Settings did not commit typed fps text; the launcher did not check `cairo`. | Fixed, with unit tests where a pure test can check it. |
 
 UNVERIFIED (no run on a real Ubuntu desktop):
 
@@ -499,6 +504,8 @@ UNVERIFIED (no run on a real Ubuntu desktop):
 - NVENC on Linux (CI has no GPU; all CI runs use libx264).
 - The real tray (AppIndicator), notifications, sounds, clipboard paste in Nautilus, HiDPI scale, multi-monitor.
 - Audio capture.
+- Never executed on any machine: the portal D-Bus calls, the `Closed` signal, the Wayland controller with real GTK, the experimental Wayland border, the GNOME shortcut through `gsettings`.
+- A user who picks Ctrl+Alt+F1 to F12 as the hotkey on Xorg: the X server switches the console. Found in CI (Xvfb). The app does not warn.
 - X11 under a real window manager. Xvfb has none, so the EWMH window list, the frame extents and the border stacking under Mutter did not run.
 - The default settings. All CI runs set `record_audio=0`, `copy_to_clipboard=0` and `play_sounds=0`.
 

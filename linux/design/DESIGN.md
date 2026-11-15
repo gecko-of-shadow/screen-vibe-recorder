@@ -1514,3 +1514,10 @@ Sources: `critique-parity.md` (items 1 to 26), `critique-platform.md` (P1 to P16
 Checked (v2 edit): the critique claims against `DesktopRecorder.cs` (start notification, `StartSavedRegion`, `recorder.Failed`, `TryFallback`), `RecordingFrame.ComputeBorderRects`, `RegionSelector.cs` (right-click, `DrawMagnifier`), `RecordingSession.Start`, and the Linux files `tests/test_linux.py`, `tests/fake_ffmpeg*.py`, `single_instance.py`, `__main__.py`, `ui.py`, `hotkey_x11.py`, `clipboard.py`, `audio.py`, `capture.py`. On this Windows PC: `socket.AF_UNIX` is missing, `ctypes.CDLL(None)` raises `TypeError`, `fcntl` is missing, and `hotkey_x11`, `single_instance` and `audio` import.
 
 Not checked: no code was built or run on Linux. The apt names `dbus` and `x11-xserver-utils`, and all items in section 16, stay UNVERIFIED.
+
+
+## 18. Changes after the CI runs (2026-11-15)
+
+- Inputs: `-fpsprobesize 0 -probesize 32 -analyzeduration 0` on x11grab and rawvideo (HANDOFF 6.11 bug L1).
+- `KeyRepeatFilter` gets the X time; the X11 loop uses only events with the hotkey keycode (bug L2).
+- Wayland: stop on EOS and on the portal `Closed` signal; failed streams; portal cancel (bugs L3 to L5).
