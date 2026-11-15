@@ -411,9 +411,9 @@ class TrayMenuTests(_ChildCase):
         self.assertTrue(result["item_opened_dialog"])
         self.assertEqual(result["live_fps"], 5.0)
         self.assertEqual(result["file_fps"], 5.0)
-        self.assertEqual(result["file_hotkey"], [1 | 2, "F9"])
+        self.assertEqual(result["file_hotkey"], [1 | 2, "K"])
         self.assertTrue(result["hotkey_active"])
-        self.assertTrue(result["toggle_label"].endswith("Ctrl+Alt+F9"), result["toggle_label"])
+        self.assertTrue(result["toggle_label"].endswith("Ctrl+Alt+K"), result["toggle_label"])
         self.assertTrue(result["new_hotkey_opened_selector"], err)
         self.assertEqual(result["state_after_escape"], "idle")
         self.assertEqual(result["messages"], [])
@@ -1103,12 +1103,13 @@ def _child_tray_settings() -> dict:
         out["fps_after_cancel"] = tray.settings.fps
         texts = list(script.texts)
 
-        # 2. Settings... from the menu. Save fps 5 and the hotkey Ctrl+Alt+F9.
+        # 2. Settings... from the menu. Save fps 5 and the hotkey Ctrl+Alt+K.
+        # Not Ctrl+Alt+F9: the X server takes Ctrl+Alt+F1 to F12 to switch the console.
         def edit() -> None:
             dialog = tray._dialog
             dialog.fps.set_value(5)
             _set_mods(dialog, False, True, True, False)
-            _set_key(dialog, "F9")
+            _set_key(dialog, "K")
             dialog.response(gtk.ResponseType.OK)
 
         script = _Script(lambda: tray._dialog, [edit], children())
@@ -1127,7 +1128,7 @@ def _child_tray_settings() -> dict:
         out["toggle_label"] = tray.toggle_item.get_label()
 
         # 3. The new hotkey opens the selector. Esc closes it.
-        _xdo("key", "ctrl+alt+F9")
+        _xdo("key", "ctrl+alt+k")
         out["new_hotkey_opened_selector"] = _pump(_x11_selector_open, 10)
         _pump(timeout=0.3)
         _xdo("key", "Escape")
