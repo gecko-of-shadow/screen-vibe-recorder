@@ -28,25 +28,54 @@ class KeyRepeatFilter:
     """Lets only the first press of a held key through (the X11 form of MOD_NOREPEAT).
 
     With detectable auto-repeat, a held key gives press, press, press ... release.
+    Without it (for example on Xvfb), a held key gives press, then release + press
+    pairs. The X server gives both events of a pair the same time stamp.
     """
 
     def __init__(self) -> None:
         self.down = False
+        self._release_time: int | None = None
 
-    def event(self, kind: int) -> bool:
-        """kind 2 = press, 3 = release. True when the press must fire the hotkey."""
+    def event(self, kind: int, time: int | None = None) -> bool:
+        """kind 2 = press, 3 = release. time = X server time in ms, or None.
+
+        True when the press must fire the hotkey.
+        """
         if kind == KeyPress:
             if self.down:
                 return False
             self.down = True
+            last = self._release_time
+            self._release_time = None
+            if time is not None and last is not None and 0 <= time - last <= 1:
+                return False  # auto-repeat pair: release and press at the same time
             return True
         if kind == KeyRelease:
             self.down = False
+            self._release_time = time
         return False
 
 
 class _XEvent(ctypes.Structure):
     _fields_ = [("type", ctypes.c_int), ("pad", ctypes.c_byte * 188)]
+
+
+class _XKeyEvent(ctypes.Structure):
+    # The start of XKeyEvent (Xlib.h), up to the time field.
+    _fields_ = [
+        ("type", ctypes.c_int),
+        ("serial", ctypes.c_ulong),
+        ("send_event", ctypes.c_int),
+        ("display", ctypes.c_void_p),
+        ("window", ctypes.c_ulong),
+        ("root", ctypes.c_ulong),
+        ("subwindow", ctypes.c_ulong),
+        ("time", ctypes.c_ulong),
+    ]
+
+
+def _event_time(event: _XEvent) -> int:
+    return int(ctypes.cast(ctypes.byref(event), ctypes.POINTER(_XKeyEvent)).contents.time)
 
 
 def x_modifiers(modifiers: int) -> int:
@@ -191,7 +220,7 @@ class X11Hotkey:
                     continue
                 while lib.XPending(display):
                     lib.XNextEvent(display, ctypes.byref(event))
-                    if event.type in (KeyPress, KeyRelease) and self._filter.event(event.type):
+                    if event.type in (KeyPress, KeyRelease) and self._filter.event(event.type, _event_time(event)):
                         try:
                             self._callback()
                         except Exception:  # noqa: BLE001

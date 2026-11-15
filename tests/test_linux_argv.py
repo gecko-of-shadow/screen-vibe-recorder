@@ -54,7 +54,7 @@ class ArgvTests(unittest.TestCase):
         argv = x11_argv(make_settings(), x264_plan(), WHEN, ":0", None, "ffmpeg")
         expected = (
             "ffmpeg -hide_banner -loglevel error -stats -y -thread_queue_size 128 -f x11grab -framerate 10 "
-            "-draw_mouse 1 -video_size 300x200 -i :0.0+100,100 -fps_mode cfr -c:v libx264 -preset veryfast "
+            "-draw_mouse 1 -fpsprobesize 0 -probesize 32 -analyzeduration 0 -video_size 300x200 -i :0.0+100,100 -fps_mode cfr -c:v libx264 -preset veryfast "
             "-tune stillimage -crf 27 -x264-params rc-lookahead=20 -threads 10 -g 300 -pix_fmt yuv420p "
             "-movflags +frag_keyframe+empty_moov -frag_duration 2000000 -flush_packets 1 "
             "/home/me/Recordings/desktop_2026-11-14_10-20-30_456.mp4"
@@ -108,7 +108,7 @@ class ArgvTests(unittest.TestCase):
         plan = CapturePlan("pipewire", "libx264", Rect(0, 0, 1120, 892), 1120, 892, ())
         text = joined(wayland_argv(s, plan, WHEN, None, "ffmpeg"))
         self.assertIn(
-            " -f rawvideo -pixel_format bgr0 -video_size 1120x892 -framerate 10 -i pipe:0 "
+            " -f rawvideo -pixel_format bgr0 -video_size 1120x892 -framerate 10 -fpsprobesize 0 -probesize 32 -analyzeduration 0 -i pipe:0 "
             "-vf format=yuv420p,mpdecimate=hi=256:lo=128:frac=0.33:max=9 -fps_mode vfr -c:v libx264 ",
             text,
         )

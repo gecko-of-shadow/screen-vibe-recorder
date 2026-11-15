@@ -454,15 +454,20 @@ class X11GuiTests(unittest.TestCase):
         cy = values["Absolute upper-left Y"] + values["Height"] // 2
         since = self.mark()
         _xdotool("mousemove", str(cx), str(cy), "click", "1")
-        self.expect(STATS_RE, 15, since)
+        stats = self.expect(STATS_RE, 15, since)
         time.sleep(0.5)
         self.assertNotIn('"Recording frame"', _tree())
+        n = count_frames(self.one_video())
+        self.assertGreaterEqual(n, 15, "the 2 s recording has too few frames")
+        self.assertEqual(int(stats.group(2)), n)
 
     def test_kill_app_ends_ffmpeg(self) -> None:
         self.start_app()
         self.open_selector()
         self.drag(300, 200, 599, 399)
-        time.sleep(3)
+        # x264 holds about 3 s of frames (lookahead + threads). The file needs one written
+        # fragment (2 s) to have a readable length after a kill.
+        time.sleep(7)
         found = subprocess.run(["pgrep", "-f", self.out], stdout=subprocess.PIPE, text=True)
         pids = [int(item) for item in found.stdout.split()]
         self.assertTrue(pids, "no FFmpeg process found")

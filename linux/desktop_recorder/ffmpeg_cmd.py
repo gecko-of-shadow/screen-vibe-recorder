@@ -129,6 +129,12 @@ def _head(ffmpeg: str) -> list[str]:
     return [ffmpeg, "-hide_banner", "-loglevel", "error", "-stats", "-y"]
 
 
+# Input options that skip the stream probe. Without them, FFmpeg 6.1 reads about
+# 2 s of x11grab frames before it starts to encode. A stop in that time gave a
+# file with no frames (checked on GitHub Actions ubuntu-24.04, 2026-11-15).
+PROBE_ARGS = ["-fpsprobesize", "0", "-probesize", "32", "-analyzeduration", "0"]
+
+
 def _audio_input(audio_device: str | None) -> list[str]:
     if not audio_device:
         return []
@@ -212,7 +218,7 @@ def x11_argv(settings: Settings, plan: CapturePlan, when: datetime, display: str
     mouse = "1" if settings.show_pointer else "0"
     target = x11_target(display)
     args = _head(ffmpeg)
-    args += ["-thread_queue_size", "128", "-f", "x11grab", "-framerate", fps_text, "-draw_mouse", mouse]
+    args += ["-thread_queue_size", "128", "-f", "x11grab", "-framerate", fps_text, "-draw_mouse", mouse] + PROBE_ARGS
     vf: list[str] = []
     if plan.region is None:
         args += ["-i", target]
@@ -229,7 +235,7 @@ def wayland_argv(settings: Settings, plan: CapturePlan, when: datetime,
                  audio_device: str | None, ffmpeg: str = "ffmpeg") -> list[str]:
     args = _head(ffmpeg)
     args += ["-f", "rawvideo", "-pixel_format", "bgr0", "-video_size", f"{plan.width}x{plan.height}",
-             "-framerate", format_fps(settings.fps), "-i", "pipe:0"]
+             "-framerate", format_fps(settings.fps)] + PROBE_ARGS + ["-i", "pipe:0"]
     if audio_device:
         args += _audio_input(audio_device) + ["-shortest"]
     args += _tail(settings, plan, when, bool(audio_device), [])

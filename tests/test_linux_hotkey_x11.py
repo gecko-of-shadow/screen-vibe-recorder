@@ -20,6 +20,18 @@ class KeyRepeatFilterTests(unittest.TestCase):
         self.assertFalse(f.event(3))
         self.assertTrue(f.event(2))
 
+    def test_repeat_pairs_without_detectable_repeat(self) -> None:
+        # No detectable auto-repeat: press, then release + press pairs with one time stamp.
+        f = KeyRepeatFilter()
+        self.assertTrue(f.event(2, 1000))
+        self.assertFalse(f.event(3, 1500))
+        self.assertFalse(f.event(2, 1500))
+        self.assertFalse(f.event(3, 1540))
+        self.assertFalse(f.event(2, 1541))
+        self.assertFalse(f.event(3, 1700))
+        # A real new press after the real release fires again.
+        self.assertTrue(f.event(2, 2500))
+
     def test_release_without_press(self) -> None:
         f = KeyRepeatFilter()
         self.assertFalse(f.event(KeyRelease))
