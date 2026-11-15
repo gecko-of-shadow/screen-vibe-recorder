@@ -514,8 +514,8 @@ loop until stop flag:
     due = t0 + n*interval; now = clock()
     if now < due: sleep(min(due - now, 0.05)); continue
     behind = now - due
-    if behind > 2.0:
-        k = floor(behind * fps); skipped += k; n += k; continue
+    if behind > max(2.0, interval):                            # never skip a tick less than one interval late
+        k = max(1, floor(behind * fps)); skipped += k; n += k; continue
     f = latest frame
     if f.seq != last_seq: fresh += 1; last_seq = f.seq  else: repeats += 1
     if behind >= interval: late += 1
@@ -526,7 +526,7 @@ loop until stop flag:
 - `start(write, after_seq, fresh_wait)`: the controller passes `after_seq = latest().seq` at accept (11.3 step 5). The ticker then waits for a frame that comes after the selector closed. After `fresh_wait` s it uses the latest frame anyway. `restart` uses `after_seq=0`, so it starts at once with the kept frame.
 - `restart(write)`: call `stop()`, set all counters to 0, clear `error`, then `start(write)`. The slot keeps the latest frame. A still screen sends no new frame, so a new pump would have no picture (D17).
 - `offer`: `received += 1`. If the slot holds a frame that no tick used, `superseded += 1`. Then replace the slot. Use a lock.
-- A blocking `write` makes the ticker late. Late ticks still write, so the video length stays equal to wall time. Late ticks show as duplicates. A gap over 2 s is skipped, and the video gets shorter. Skipped ticks show as dropped.
+- A blocking `write` makes the ticker late. Late ticks still write, so the video length stays equal to wall time. Late ticks show as duplicates. A gap over 2 s and over one interval is skipped, and the video gets shorter. At fps < 0.5 a gap shorter than one interval is written late, so the ticker never loops with k = 0. Skipped ticks show as dropped.
 - A still screen gives repeats. Repeats are normal. They are not in the status line. In `changes` mode, `mpdecimate` removes them.
 
 ### 7.3 Status mapping
@@ -1016,13 +1016,19 @@ class GstStream:
    - Use only the streams that have a frame.
 4. Call `open_wayland_selector(...)`. Set the state to `selecting`.
 5. On accept `(i, crop)`:
-   - Store `accept_seq = pump_i.latest().seq`. This frame can still show the selector (P6). Then destroy all selector windows.
+   - Store `accept_seq = pump_i.latest().seq`. This frame can still show the selector (P6). Then destroy all selector windows. The shell calls the `before_close(index, (alloc_w, alloc_h))` argument of `open_wayland_selector` before it destroys the windows. The controller stores `accept_seq` and the window size there (11.4).
    - Stop the other streams.
    - Save `wayland_region = (pos_x, pos_y, crop.x, crop.y, crop.w, crop.h)`. A stream without `position` gives (0, 0).
    - Call `pump_i.set_crop(crop)`. Make `plan_wayland`. Start `FfmpegProcess` on the main thread.
    - Call `pump_i.start(proc.write, after_seq=accept_seq)` (D18). Show the frame (D10). Set the state to `recording`.
 6. On cancel: stop all streams, close the fd, close the session, and save the selector options.
 7. Fallback retry (5.4): take a new snapshot and new stats (D16). Start a new `FfmpegProcess` with x264. Then call `pump_i.restart(proc.write)` (D17). The `GstStream` and the latest frame stay. The new file gets a new stamp. The failed file is not copied or counted.
+7a. End of the screen cast without the Stop key:
+   - `GstStream` reports a bus ERROR or an EOS (`"The screen cast ended, so the recording stopped."`) once.
+   - After `open`, the controller watches `org.freedesktop.portal.Session::Closed` (`GioTransport.watch_closed`). `close_session` removes the watch before it sends Close.
+   - In `recording`: stop with the error text in the stats notice. In `portal`: clean up and notify `"The screen cast ended. Try again."`. In `selecting`: mark the streams failed.
+   - A stream error before `recording` marks the stream failed (it reports one error only). The poll drops failed streams. An accept or a launch on a failed stream cleans up and notifies its text.
+7b. Exit or a session signal during the portal dialog: `stop_sync` calls `GioTransport.cancel()`. It ends the nested dialog loop at once, and later requests fail at once.
 8. `record_on_launch` (`start_saved_region`):
    - Open the portal with the saved token. The GNOME dialog shows when the token does not work.
    - If `wayland_region` is all zeros (no saved region), record the whole of stream 0: `accept_rect(Rect(0,0,iw,ih), Rect(0,0,iw,ih))`. Add no note.

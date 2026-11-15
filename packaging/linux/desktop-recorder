@@ -24,7 +24,7 @@ EOF
   exit 0
 fi
 
-if [ "$#" -eq 0 ] && ! python3 -c 'import gi, Xlib' >/dev/null 2>&1; then
+if [ "$#" -eq 0 ] && ! python3 -c 'import gi, Xlib, cairo' >/dev/null 2>&1; then
   echo "Desktop Recorder needs system packages. On Ubuntu 24.04:" >&2
   echo "  sudo apt install ffmpeg python3 python3-gi python3-gi-cairo python3-xlib gir1.2-gtk-3.0 gir1.2-ayatanaappindicator3-0.1 gir1.2-notify-0.7 gir1.2-gstreamer-1.0 gstreamer1.0-plugins-base gstreamer1.0-pipewire pipewire pipewire-pulse wireplumber pulseaudio-utils xdg-desktop-portal xdg-desktop-portal-gnome xclip wl-clipboard" >&2
   exit 1

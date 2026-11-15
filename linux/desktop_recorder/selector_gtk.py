@@ -614,10 +614,13 @@ def open_x11_selector(settings: "Settings", display_name: str | None,
 
 class _WaylandSelector:
     def __init__(self, frames: list[tuple["PortalStreamInfo", "Frame"]], settings: "Settings",
-                 token: str, on_done: Callable[[int | None, Rect | None, SelectorOptions], None]) -> None:
+                 token: str, on_done: Callable[[int | None, Rect | None, SelectorOptions], None],
+                 before_close: Callable[[int, tuple[int, int] | None], None] | None = None) -> None:
         self.frames = frames
         self.token = token
         self.on_done = on_done
+        self.before_close = before_close
+        self.views: dict[int, SelectorView] = {}   # stream index -> view
         # One options object for all windows. C, M, P change it.
         self.options = _options_of(settings)
         self.windows: list[Gtk.Window] = []
@@ -695,6 +698,7 @@ class _WaylandSelector:
             win.connect("delete-event", self._on_delete)
             win.connect("map-event", self._on_map, view, cursor)
             win.add(view)
+            self.views[si] = view
             win.fullscreen_on_monitor(screen, mi)
             if self.token:
                 win.set_startup_id(self.token)
@@ -754,8 +758,23 @@ class _WaylandSelector:
             return
         self._done = True
         _active.discard(self)
-        # Send the destroy requests first (11.3 step 5). The controller then reads the
-        # accept frame, and the pump waits for a frame after it.
+        if index is not None and self.before_close is not None:
+            # 11.3 step 5: the controller reads accept_seq before the windows go.
+            # 11.4: it also gets the window size (logical px) for a stream with no portal size.
+            size = None
+            view = self.views.get(index)
+            if view is not None:
+                try:
+                    alloc = view.get_allocation()
+                    if alloc.width > 0 and alloc.height > 0:
+                        size = (int(alloc.width), int(alloc.height))
+                except Exception:
+                    size = None
+            try:
+                self.before_close(index, size)
+            except Exception as exc:
+                _log(f"Desktop Recorder: selector before_close failed: {exc}")
+        # Send the destroy requests, then flush. The pump waits for a frame after accept_seq.
         self._destroy_all()
         try:
             display = Gdk.Display.get_default()
@@ -771,9 +790,13 @@ class _WaylandSelector:
 
 def open_wayland_selector(frames: list[tuple["PortalStreamInfo", "Frame"]], settings: "Settings",
                           token: str,
-                          on_done: Callable[[int | None, Rect | None, SelectorOptions], None]) -> str | None:
+                          on_done: Callable[[int | None, Rect | None, SelectorOptions], None],
+                          before_close: Callable[[int, tuple[int, int] | None], None] | None = None,
+                          ) -> str | None:
     """Open one selector window for each matched stream. Return an error text, or None.
 
     on_done gets (index into frames, crop in stream px, options), or (None, None, options) on cancel.
+    before_close, if given, gets (index, window size in logical px or None) on accept,
+    before the windows are destroyed.
     """
-    return _WaylandSelector(frames, settings, token, on_done).open()
+    return _WaylandSelector(frames, settings, token, on_done, before_close).open()

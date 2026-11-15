@@ -159,5 +159,41 @@ class GnomeShortcutQuoteTest(unittest.TestCase):
         self.assertEqual(_parse_gvariant_string(values["name"]), "Desktop Recorder")
 
 
+class GnomeShortcutListTest(unittest.TestCase):
+    def run_with(self, listing: str):
+        calls: list[list[str]] = []
+
+        def runner(args):
+            calls.append(args)
+            return _Result(listing if args[1] == "get" else "")
+
+        ok = update_gnome_shortcut(12, "D", "/x/desktop-recorder --toggle", runner)
+        writes = [call for call in calls if call[1:4] == ["set", "org.gnome.settings-daemon.plugins.media-keys",
+                                                          "custom-keybindings"]]
+        return ok, writes, calls
+
+    def test_bad_listing_writes_nothing(self) -> None:
+        # A parse failure must not replace the user's other shortcuts with ours only.
+        for listing in ("not a list", "['a', ", "'one string'", "42"):
+            ok, writes, calls = self.run_with(listing)
+            self.assertFalse(ok, listing)
+            self.assertEqual(writes, [], listing)
+            self.assertEqual(len(calls), 1, listing)
+
+    def test_other_shortcuts_are_kept(self) -> None:
+        other = "/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/custom0/"
+        ok, writes, _calls = self.run_with("['" + other + "']")
+        self.assertTrue(ok)
+        self.assertEqual(len(writes), 1)
+        self.assertIn(other, writes[0][-1])
+        self.assertIn("desktop-recorder/", writes[0][-1])
+
+    def test_empty_listing_adds_ours(self) -> None:
+        for listing in ("@as []", "[]", ""):
+            ok, writes, _calls = self.run_with(listing)
+            self.assertTrue(ok, listing)
+            self.assertEqual(len(writes), 1, listing)
+
+
 if __name__ == "__main__":
     unittest.main()

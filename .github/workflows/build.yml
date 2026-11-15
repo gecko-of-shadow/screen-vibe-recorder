@@ -53,3 +53,60 @@ jobs:
         with:
           name: linux-test-output
           path: ${{ runner.temp }}/dr-tests
+
+  tarball:
+    # The portable archive on a runner with only the apt line of packaging/linux/README.txt
+    # (the user setup), plus xvfb and xdotool for this test.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the README packages (exact copy of the user lines)
+        run: |
+          set -euo pipefail
+          # Take the "sudo apt update" and "sudo apt install ..." lines from README.txt
+          # as they are, so this job tests the line that users copy.
+          awk '/^    sudo apt update$/ {on=1} on && /^$/ {exit} on {print}' packaging/linux/README.txt \
+            | sed 's/^    //' > "$RUNNER_TEMP/user-apt.sh"
+          echo "--- user apt lines:"
+          cat "$RUNNER_TEMP/user-apt.sh"
+          grep -q '^sudo apt install ffmpeg ' "$RUNNER_TEMP/user-apt.sh"
+          # apt asks "Do you want to continue?" with no terminal. Answer yes without a change to the lines.
+          echo 'APT::Get::Assume-Yes "true";' | sudo tee /etc/apt/apt.conf.d/90-ci-assume-yes >/dev/null
+          export DEBIAN_FRONTEND=noninteractive
+          bash -euo pipefail "$RUNNER_TEMP/user-apt.sh"
+          sudo apt-get install -y xvfb xdotool
+      - name: Make the archive
+        run: |
+          set -euo pipefail
+          archive=$(sh packaging/make-linux-tarball.sh "" "$RUNNER_TEMP" | tail -n 1)
+          test -f "$archive"
+          echo "ARCHIVE=$archive" >> "$GITHUB_ENV"
+      - name: Unpack and run from the unpacked folder
+        run: |
+          set -euo pipefail
+          stage=$(mktemp -d "$RUNNER_TEMP/unpacked.XXXXXX")
+          tar -C "$stage" -xzf "$ARCHIVE"
+          app=$(echo "$stage"/desktop-recorder-*)
+          test -x "$app/desktop-recorder"
+          cd "$app"
+          cat > "$RUNNER_TEMP/run-unpacked.sh" << 'SCRIPT'
+          set -euo pipefail
+          echo "--- --help"
+          ./desktop-recorder --help
+          echo "--- --check"
+          ./desktop-recorder --check | tee check.txt
+          grep -qx 'backend: x11' check.txt
+          grep -q '^ffmpeg: /' check.txt
+          grep -q '^audio: ' check.txt   # "audio: none" is fine here: no sound server runs
+          rm check.txt
+          echo "--- GUI imports that the tray needs"
+          python3 -c "import gi, Xlib, cairo; gi.require_version('Gtk', '3.0'); gi.require_version('Gst', '1.0'); gi.require_version('Notify', '0.7'); gi.require_version('AyatanaAppIndicator3', '0.1'); from gi.repository import Gtk, Gst, Notify, AyatanaAppIndicator3"
+          echo "--- --smoke 1.2"
+          ./desktop-recorder --smoke 1.2
+          SCRIPT
+          env -u PYTHONPATH dbus-run-session -- xvfb-run -a -s "-screen 0 1280x800x24" \
+            bash "$RUNNER_TEMP/run-unpacked.sh"

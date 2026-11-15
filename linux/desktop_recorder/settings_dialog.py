@@ -253,6 +253,10 @@ class SettingsDialog(Gtk.Dialog):
             message.destroy()
 
     def _validated(self) -> Settings | None:
+        # Commit typed text first. A SpinButton updates its value only on Enter, focus-out
+        # or an arrow click, so Save from the keyboard can read the old value.
+        self.fps.update()
+        self.split.update()
         modifiers = self._modifiers()
         key = parse_key(self.key.get_active_text() or "")
         if not is_valid(modifiers, key):

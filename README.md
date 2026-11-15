@@ -11,7 +11,7 @@ Download a portable archive from the [Releases page](../../releases/latest). Unz
 - Windows: `desktop-recorder-<version>-windows-x64.zip`. Start `DesktopRecorder.exe`.
 - Ubuntu 24.04: `desktop-recorder-<version>-linux-x86_64.tar.gz`. Run `./desktop-recorder`. The README in the archive lists the apt packages it still needs (GTK, GStreamer, ffmpeg, and the Python GI bindings).
 
-Version 2.0.0 and later have the region selector on Windows. Version 2.1.0 adds it to the Ubuntu program. Version 1.0.0 records the full desktop.
+Version 2.0.0 and later have the region selector on Windows. The Ubuntu program gets it in the next release (not released yet). Version 1.0.0 records the full desktop.
 
 Install ffmpeg, if you do not have it. It is not inside the archive. The GPU capture (`ddagrab`) needs a recent ffmpeg build. The test used the gyan.dev full build of 2026-04-30. In PowerShell:
 

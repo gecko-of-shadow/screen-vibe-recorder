@@ -158,7 +158,7 @@ Other rules:
 10. Default frame rate: 10 fps (was 2). Bran decided on 2026-11-14. Reason: the 6.8 rule needs 2.3 fps for 1000 CSS px/s at 125% in an 892 px area. 10 fps is safe up to about 4400 CSS px/s. Bran's settings file already had `fps=10`.
 11. Quality default: keep Balanced (CQ 23). More reads of B3, B9 and B11 are put off to a later date (Bran, 2026-11-14).
 12. Release: push `test-kit`, merge it into `main`, publish v2.0.0 (Bran, 2026-11-14). The version is 2.0.0 because the hotkey now opens the selector, not a full-desktop recording.
-13. Ubuntu port (Bran, 2026-11-14): port all new features to the Linux app for Ubuntu Desktop 24.04. Test it on GitHub Actions in a new public repo, `gecko-of-shadow/screen-vibe-recorder`, branch `linux-port`. Linux version: 2.1.0.
+13. Ubuntu port (Bran, 2026-11-14): port all new features to the Linux app for Ubuntu Desktop 24.04. Test it on GitHub Actions in a new public repo, `gecko-of-shadow/screen-vibe-recorder`, branch `linux-port`. The Linux version number 2.1.0 in `__init__.py` is a default from the design, not a decision by Bran. Open question for Bran.
 
 ---
 
@@ -499,6 +499,8 @@ UNVERIFIED (no run on a real Ubuntu desktop):
 - NVENC on Linux (CI has no GPU; all CI runs use libx264).
 - The real tray (AppIndicator), notifications, sounds, clipboard paste in Nautilus, HiDPI scale, multi-monitor.
 - Audio capture.
+- X11 under a real window manager. Xvfb has none, so the EWMH window list, the frame extents and the border stacking under Mutter did not run.
+- The default settings. All CI runs set `record_audio=0`, `copy_to_clipboard=0` and `play_sounds=0`.
 
 Not checked: the Windows app with short gdigrab or ddagrab recordings. L1 can also apply to FFmpeg on Windows. 6.7 has no run shorter than 2 s.
 

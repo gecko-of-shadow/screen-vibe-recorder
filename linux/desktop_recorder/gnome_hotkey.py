@@ -26,6 +26,9 @@ def update_gnome_shortcut(modifiers: int, key: str, command: str, runner: Callab
     if text is None:
         return False
     paths = _parse_list(text)
+    if paths is None:
+        # Output we cannot read: do not write the list, or the other shortcuts are lost.
+        return False
     if PATH not in paths:
         paths.append(PATH)
         listed = "[" + ", ".join("'" + item + "'" for item in paths) + "]"
@@ -59,7 +62,8 @@ def _ok(result: object) -> bool:
     return getattr(result, "returncode", 0) in (0, None)
 
 
-def _parse_list(text: str) -> list[str]:
+def _parse_list(text: str) -> list[str] | None:
+    """The custom-keybindings list. None when the text does not parse as a list."""
     raw = text.strip()
     if raw in ("@as []", "[]", ""):
         return []
@@ -67,8 +71,8 @@ def _parse_list(text: str) -> list[str]:
         raw = raw[4:].strip()
     try:
         value = ast.literal_eval(raw)
-    except (SyntaxError, ValueError):
-        return []
+    except (SyntaxError, ValueError, TypeError, MemoryError, RecursionError):
+        return None
     if isinstance(value, (list, tuple)):
         return [str(item) for item in value]
-    return []
+    return None

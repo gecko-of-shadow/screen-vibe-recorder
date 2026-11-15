@@ -15,7 +15,7 @@ from typing import Any, Callable
 from .geometry import Rect
 from .wayland_pump import FramePump, crop_rows, frame_stride, pipeline_description
 
-__all__ = ["GstFrame", "GstStream", "TEXT_NEED_GST", "TEXT_BAD_FRAME", "TEXT_SIZE_CHANGED"]
+__all__ = ["GstFrame", "GstStream", "TEXT_NEED_GST", "TEXT_BAD_FRAME", "TEXT_SIZE_CHANGED", "TEXT_CAST_ENDED"]
 
 TEXT_NEED_GST = (
     "Wayland capture needs GStreamer PipeWire support. Install gir1.2-gstreamer-1.0, "
@@ -23,6 +23,7 @@ TEXT_NEED_GST = (
 )
 TEXT_BAD_FRAME = "Bad frame from the screen cast."
 TEXT_SIZE_CHANGED = "The shared screen changed size, so the recording stopped."
+TEXT_CAST_ENDED = "The screen cast ended, so the recording stopped."
 TEXT_NO_SINK = "Could not build the screen cast pipeline."
 TEXT_NOT_PLAYING = "The screen cast pipeline did not start."
 
@@ -149,6 +150,8 @@ class GstStream:
             bus.add_signal_watch()
             self._bus = bus
             self._handlers.append((bus, bus.connect("message::error", self._on_bus_error)))
+            # A live source can end with EOS and no error (for example when the node goes away).
+            self._handlers.append((bus, bus.connect("message::eos", self._on_bus_eos)))
         result = pipeline.set_state(Gst.State.PLAYING)
         if result == Gst.StateChangeReturn.FAILURE:
             self.stop()
@@ -218,6 +221,10 @@ class GstStream:
         except Exception as exc:  # noqa: BLE001
             text = str(exc)
         self._send_error(text or "GStreamer error.")
+
+    def _on_bus_eos(self, _bus: Any, _message: Any) -> None:
+        """Main thread (bus signal watch). No new frame comes after EOS."""
+        self._send_error(TEXT_CAST_ENDED)
 
     def _error_from_thread(self, text: str) -> None:
         with self._lock:

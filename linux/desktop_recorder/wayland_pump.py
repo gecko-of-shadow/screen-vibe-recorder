@@ -229,8 +229,10 @@ class FramePump:
                 sleep(min(due - now, MAX_SLEEP))
                 continue
             behind = now - due
-            if behind > SKIP_AFTER:
-                k = math.floor(behind * self.fps)
+            # Skip only ticks that are more than one interval overdue. At fps < 0.5 a gap of
+            # 2 s is less than one interval: then k would be 0 and the loop would spin.
+            if behind > max(SKIP_AFTER, interval):
+                k = max(1, math.floor(behind * self.fps))
                 with self._lock:
                     self._counters.skipped += k
                 n += k

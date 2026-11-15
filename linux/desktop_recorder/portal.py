@@ -171,6 +171,40 @@ class GioTransport:
         self._Gio = Gio
         self._GLib = GLib
         self._bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+        self._loop: Any = None          # the nested loop of the running request, or None
+        self._box: dict[str, Any] | None = None
+        self._cancelled = False
+        self._closed_watches: dict[str, int] = {}
+
+    def cancel(self) -> None:
+        """Main thread. End a running dialog wait at once. Later requests fail at once.
+
+        Exit and session signals call this: Gtk.main_quit() does not end the nested loop.
+        """
+        self._cancelled = True
+        if self._box is not None:
+            self._box["cancelled"] = True
+        loop = self._loop
+        if loop is not None:
+            loop.quit()
+
+    def watch_closed(self, session: str, callback: Any) -> int:
+        """Call callback() when the portal closes the session (for example the user
+        clicks Stop in the GNOME screen sharing indicator). Return the subscription id."""
+        def on_signal(*_args: Any) -> None:
+            callback()
+
+        subscription = self._bus.signal_subscribe(
+            self.BUS_NAME,
+            "org.freedesktop.portal.Session",
+            "Closed",
+            session,
+            None,
+            self._Gio.DBusSignalFlags.NONE,
+            on_signal,
+        )
+        self._closed_watches[session] = subscription
+        return subscription
 
     def request(self, method: str, options: dict[str, Any]) -> dict[str, Any]:
         token = "dr" + uuid.uuid4().hex[:16]
@@ -193,6 +227,8 @@ class GioTransport:
     def _call(self, method: str, path: str, parameters: Any) -> dict[str, Any]:
         Gio = self._Gio
         GLib = self._GLib
+        if self._cancelled:
+            raise PortalError(TEXT_CANCELLED)
         box: dict[str, Any] = {}
         loop = GLib.MainLoop()
 
@@ -230,13 +266,21 @@ class GioTransport:
                 self.DIALOG_TIMEOUT_MS,
                 None,
             )
-            if "code" not in box:
+            if "code" not in box and not self._cancelled:
                 timeout_id = GLib.timeout_add(self.DIALOG_TIMEOUT_MS, on_timeout)
-                loop.run()
+                self._loop = loop
+                self._box = box
+                try:
+                    loop.run()
+                finally:
+                    self._loop = None
+                    self._box = None
                 if not box.get("timed_out"):
                     GLib.source_remove(timeout_id)
         finally:
             self._bus.signal_unsubscribe(subscription)
+        if self._cancelled and "code" not in box:
+            raise PortalError(TEXT_CANCELLED)
         if "code" not in box:
             raise PortalError(TEXT_TIMED_OUT)
         if box["code"] != 0:
@@ -287,6 +331,13 @@ class GioTransport:
         return owned
 
     def close_session(self, session: str) -> None:
+        # Stop the Closed watch first, so our own Close does not call it.
+        subscription = self._closed_watches.pop(session, None)
+        if subscription is not None:
+            try:
+                self._bus.signal_unsubscribe(subscription)
+            except Exception:  # noqa: BLE001
+                pass
         try:
             self._bus.call_sync(
                 self.BUS_NAME,

@@ -138,6 +138,9 @@ class _Stream:
     gst: Any             # wayland.GstStream
     fd: int              # our dup of the PipeWire fd
     stopped: bool = False
+    failed: str | None = None                   # error text from before the recording
+    accept_seq: int | None = None               # seq of the latest frame when the selector accepted
+    window_size: tuple[int, int] | None = None  # selector window size in logical px (11.4)
 
     def stop(self) -> None:
         if self.stopped:
@@ -221,6 +224,7 @@ class Controller:
         self.cast: _Cast | None = None
         self._last_stats: str | None = None
         self._quitting = False
+        self._portal_transport: Any = None   # set while the portal dialog can run (Exit cancels it)
         self._audio_lock = threading.Lock()
         self._audio_thread: threading.Thread | None = None
         self._audio_result: tuple[str | None, bool] | None = None   # (device, responds)
@@ -576,19 +580,28 @@ class Controller:
             self._start_failed(messages.FFMPEG_MISSING)
             return False
         try:
-            from .portal import GioTransport, PortalError, ScreenCast
+            from .portal import GioTransport, ScreenCast
 
             transport = GioTransport()
+            self._portal_transport = transport
             portal = ScreenCast(transport).open(settings.wayland_restore_token, settings.show_pointer)
         except Exception as exc:  # noqa: BLE001 - PortalError and D-Bus errors
-            if self.state == PORTAL:
+            if self.state == PORTAL and not self._quitting:
                 self._start_failed(str(exc) or exc.__class__.__name__)
             return False
+        finally:
+            self._portal_transport = None
         cast = _Cast(transport, portal, purpose, token, infos=list(portal.streams))
         # The portal dialog runs a nested main loop. Exit can come during it.
         if self._quitting or self.state != PORTAL:
             cast.close()
             return False
+        watch = getattr(transport, "watch_closed", None)
+        if watch is not None:
+            try:
+                watch(portal.session, functools.partial(self._portal_closed_soon, cast))
+            except Exception as exc:  # noqa: BLE001 - the recording works without the watch
+                _log(f"Desktop Recorder: cannot watch the screen cast session: {exc}")
         if portal.restore_token and portal.restore_token != settings.wayland_restore_token:
             settings.wayland_restore_token = portal.restore_token
             self._save_live()
@@ -634,12 +647,14 @@ class Controller:
         if cast is not self.cast or cast.closed or self.state != PORTAL:
             cast.timer = None
             return False
-        have = [s for s in cast.streams if s.pump.latest() is not None]
-        if len(have) < len(cast.streams) and time.monotonic() < cast.deadline:
+        live = [s for s in cast.streams if not s.failed]
+        have = [s for s in live if s.pump.latest() is not None]
+        if len(have) < len(live) and time.monotonic() < cast.deadline:
             return True
         cast.timer = None
         if not have:
-            self._cast_failed(cast, messages.NO_PICTURE)
+            failed = [s.failed for s in cast.streams if s.failed]
+            self._cast_failed(cast, failed[0] if failed else messages.NO_PICTURE)
             return False
         for stream in cast.streams:
             if stream not in have:
@@ -659,11 +674,22 @@ class Controller:
             from .selector_gtk import open_wayland_selector
 
             error = open_wayland_selector(frames, self.get_settings(), cast.token,
-                                          functools.partial(self._wayland_selected, cast))
+                                          functools.partial(self._wayland_selected, cast),
+                                          before_close=functools.partial(self._wayland_before_close, cast))
         except Exception as exc:  # noqa: BLE001
             error = str(exc) or exc.__class__.__name__
         if error and cast is self.cast and self.state == SELECTING:
             self._cast_failed(cast, messages.SELECTOR_FAILED + error)
+
+    @staticmethod
+    def _wayland_before_close(cast: _Cast, index: int, size: tuple[int, int] | None) -> None:
+        """The selector calls this on accept, before it destroys its windows (11.3 step 5)."""
+        if not (0 <= index < len(cast.streams)):
+            return
+        stream = cast.streams[index]
+        latest = stream.pump.latest()
+        stream.accept_seq = latest.seq if latest is not None else 0
+        stream.window_size = size
 
     @_guarded
     def _wayland_selected(self, cast: _Cast, index: int | None, crop: Rect | None,
@@ -679,8 +705,15 @@ class Controller:
             self._set_state(IDLE)
             return
         chosen = cast.streams[index]
-        latest = chosen.pump.latest()
-        accept_seq = latest.seq if latest is not None else 0
+        if chosen.failed:
+            # The stream failed while the selector was open: it gives no new frames.
+            self._cast_failed(cast, chosen.failed)
+            return
+        if chosen.accept_seq is not None:
+            accept_seq = chosen.accept_seq
+        else:
+            latest = chosen.pump.latest()
+            accept_seq = latest.seq if latest is not None else 0
         self._keep_only(cast, chosen)
         pos = chosen.info.position or (0, 0)
         s = self.get_settings()
@@ -721,6 +754,9 @@ class Controller:
             crop = accept_rect(bounds, bounds)
         if crop is None:
             self._cast_failed(cast, messages.NO_PICTURE)
+            return
+        if chosen.failed:
+            self._cast_failed(cast, chosen.failed)
             return
         self._keep_only(cast, chosen)
         self._wayland_start(cast, chosen, crop, after_seq=0, sound=True, notice=False,
@@ -774,9 +810,8 @@ class Controller:
         iw = frame_img.width if frame_img is not None else crop.right
         ih = frame_img.height if frame_img is not None else crop.bottom
         pos = tuple(chosen.info.position or (0, 0))
-        # The spec asks for the selector window size when the portal gives no size.
-        # The selector API does not give it, so use the stream size (scale 1).
-        logical = tuple(chosen.info.size or (iw, ih))
+        # No portal size: use the selector window size (11.4). No selector (launch): stream size.
+        logical = tuple(chosen.info.size or chosen.window_size or (iw, ih))
         lx, ly, lw, lh = stream_to_layout(crop, pos, logical, (iw, ih))
         x0, y0 = math.floor(lx), math.floor(ly)
         x1, y1 = math.ceil(lx + lw), math.ceil(ly + lh)
@@ -810,8 +845,32 @@ class Controller:
             session.error_text = text
             self.stop()
             return False
-        # Before the recording: the stream gives no frame, and the poll drops it.
+        # Before the recording: mark the stream. The poll drops it, and an accept on it
+        # fails with this text. GstStream reports one error only, so keep it here.
+        if stream in cast.streams and not stream.failed:
+            stream.failed = text
         _log(f"Desktop Recorder: screen cast error: {text}")
+        return False
+
+    def _portal_closed_soon(self, cast: _Cast) -> None:
+        # D-Bus signal callback. Do the work in a later idle callback.
+        GLib.idle_add(self._portal_closed, cast)
+
+    def _portal_closed(self, cast: _Cast) -> bool:
+        """The portal closed the session (for example Stop in the GNOME indicator)."""
+        if cast.closed or cast is not self.cast:
+            return False
+        session = self.session
+        if (self.state == RECORDING and session is not None and session.cast is cast
+                and session.stream is not None):
+            return self._stream_error(cast, session.stream, messages.CAST_ENDED)
+        if self.state == PORTAL:
+            self._cast_failed(cast, messages.CAST_CLOSED)
+            return False
+        # Selecting: the selector windows stay open. An accept then fails with this text.
+        for stream in cast.streams:
+            if not stream.failed:
+                stream.failed = messages.CAST_CLOSED
         return False
 
     # ------------------------------------------------------------ FFmpeg exit and fallback (8.3 step 4)
@@ -944,6 +1003,13 @@ class Controller:
     def stop_sync(self) -> None:
         """For Exit and signals. No sound. Blocks until FFmpeg has finished the file."""
         self._quitting = True
+        transport = self._portal_transport
+        if transport is not None:
+            # The portal dialog runs a nested loop that Gtk.main_quit() does not end.
+            try:
+                transport.cancel()
+            except Exception:  # noqa: BLE001
+                pass
         session = self.session
         if self.state in (RECORDING, STARTING) and session is not None and not session.finished:
             self._close_frame(session)

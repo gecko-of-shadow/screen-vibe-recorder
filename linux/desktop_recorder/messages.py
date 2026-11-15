@@ -90,6 +90,8 @@ def wayland_no_stop_note(hotkey_text: str) -> str:
 # ---------------------------------------------------------------- Wayland (11.3)
 
 NO_PICTURE = "The screen cast sent no picture in 3 seconds. Try again."
+CAST_ENDED = "The screen cast ended, so the recording stopped."
+CAST_CLOSED = "The screen cast ended. Try again."
 
 # ---------------------------------------------------------------- hotkey (8.5)
 

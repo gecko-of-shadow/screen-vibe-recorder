@@ -197,6 +197,40 @@ class PumpTests(unittest.TestCase):
         self.assertEqual(c.ticks, 3)
         self.assertEqual(c.late, 0)
 
+    def test_low_fps_late_write_does_not_spin(self) -> None:
+        # fps 0.2: interval 5 s. The first write blocks 7.5 s. Tick 1 is due at 5: 2.5 s behind.
+        # That is over 2 s but less than one interval, so it is written late, not skipped.
+        # The old code computed k = floor(2.5 * 0.2) = 0 and looped with no sleep.
+        pump, clock = self.make(0.2)
+        pump.offer(FakeFrame(1))
+
+        def on_write(count: int) -> None:
+            if count == 1:
+                clock.advance(7.5)
+
+        writer = Writer(3, on_write)
+        pump.start(writer)
+        c = run_until_done(self, pump, writer)
+        self.assertEqual(c.skipped, 0)
+        self.assertEqual(c.ticks, 3)
+        self.assertEqual(c.late, 0)  # 2.5 s behind is less than one interval (5 s)
+
+    def test_low_fps_skips_whole_intervals(self) -> None:
+        # fps 0.2. The first write blocks 12 s. Tick 1 is due at 5: 7 s behind, more than
+        # one interval. floor(7 * 0.2) = 1 tick is skipped. Tick 2 (due 10) is 2 s behind: written.
+        pump, clock = self.make(0.2)
+        pump.offer(FakeFrame(1))
+
+        def on_write(count: int) -> None:
+            if count == 1:
+                clock.advance(12.0)
+
+        writer = Writer(3, on_write)
+        pump.start(writer)
+        c = run_until_done(self, pump, writer)
+        self.assertEqual(c.skipped, 1)
+        self.assertEqual(c.ticks, 3)
+
     def test_superseded(self) -> None:
         pump, _clock = self.make()
         pump.offer(FakeFrame(1))
