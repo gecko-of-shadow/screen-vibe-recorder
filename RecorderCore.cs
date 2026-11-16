@@ -821,6 +821,25 @@ static class RecorderCore
 
     // Overload with the signature in the task. It assumes that NVENC is available for "auto".
     // Prefer the overload with nvencAvailable, after a call to HasNvencEncoder / TestNvencEncode.
+    // "Changes only": the longest time with no kept frame on a still screen. The goal is an AI copy
+    // with the fewest frames, so a still screen gives one frame each 60 s only. Before, it was 1 s.
+    // The keep-alive frame keeps the file length correct to 60 s, and it puts a frame into the
+    // file at least each 60 s, so a killed recording loses less.
+    public const int KeepAliveSeconds = 60;
+
+    // mpdecimate for "Changes only".
+    // hi=64:lo=64:frac=0: keep a frame when any 8x8 block changes by more than 64 (one level for each
+    // pixel, or one pixel by 64 levels). The FFmpeg defaults (hi=768, lo=320, frac=0.33) dropped a
+    // one-character change ("x.y" to "x,y", "10" to "1O") for all time when max was unlimited
+    // (checked with FFmpeg 6.1 on Linux, 2026-11-16). Screen capture has no noise, so the low values
+    // keep only real changes. UNVERIFIED on Bran's PC (ddagrab, gdigrab).
+    // max = the longest run of dropped frames = KeepAliveSeconds of frames, minus 1.
+    public static string DecimateFilter(double fps)
+    {
+        int maxDrop = Math.Max(1, (int)Math.Ceiling(ClampFps(fps) * KeepAliveSeconds) - 1);
+        return "mpdecimate=hi=64:lo=64:frac=0:max=" + maxDrop.ToString(CultureInfo.InvariantCulture);
+    }
+
     public static string[] BuildCaptureArguments(StoredSettings s, CaptureRegion region,
         IList<MonitorBounds> monitors, DateTime now)
     {
@@ -902,12 +921,7 @@ static class RecorderCore
             // which NVENC cannot read (checked with -v verbose on this FFmpeg build).
             // Convert once to the target chroma, then drop the frames that do not change.
             vf.Add("format=" + pixFmt);
-            // max = the longest run of dropped frames. Without it, a still screen at the end of a
-            // recording is lost: a 10 s recording of a still page gave a 0.1 s file (checked on
-            // Bran's PC). With max = ceil(fps) - 1, the file keeps one frame each second at least,
-            // so the length of the file is correct to 1 s.
-            int maxDrop = Math.Max(1, (int)Math.Ceiling(fps) - 1);
-            vf.Add("mpdecimate=max=" + maxDrop.ToString(CultureInfo.InvariantCulture));
+            vf.Add(DecimateFilter(fps));
         }
         if (vf.Count > 0)
         {

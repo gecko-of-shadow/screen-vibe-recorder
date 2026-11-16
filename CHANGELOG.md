@@ -14,7 +14,13 @@ This repository has no releases and no tags.
 
 ### On `main` (since Desktop Recorder 2.0.0)
 
+#### Changed
+
+- "Changes only": a still screen keeps one frame each 60 s, not each 1 s. The goal is fewer frames for an AI to read. (`mpdecimate` `max` = 60 s of frames.)
+
 #### Fixed
+
+- "Changes only": the default `mpdecimate` thresholds dropped a one-character change ("x.y" to "x,y"). The filter now uses `hi=64:lo=64:frac=0`. This fix is necessary with the longer keep-alive time, because a dropped change was lost for all time.
 
 - `packaging/make-windows-zip.sh` gives the paths to Python as arguments. A Windows path such as `D:\a\_temp` inside the Python source became an escape sequence, so the zip step of the release workflow failed. (`febdccc`)
 
