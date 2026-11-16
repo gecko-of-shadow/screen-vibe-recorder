@@ -8,32 +8,28 @@ This file was made from the commit history.
 
 This repository was made on 2026-11-15 from [gecko-of-shadow/desktop-recorder](https://github.com/gecko-of-shadow/desktop-recorder). It is not a GitHub fork. The `main` branch here is Desktop Recorder commit `cb07dff` (2026-11-15), which is the Desktop Recorder 2.0.0 program plus the two commits below. All history before that commit is the Desktop Recorder history. See the [Desktop Recorder changelog](https://github.com/gecko-of-shadow/desktop-recorder/blob/main/CHANGELOG.md) and [releases](https://github.com/gecko-of-shadow/desktop-recorder/releases) for versions 1.0.0 to 2.0.2.
 
-This repository has no releases and no tags.
+## [2.1.0] - 2026-11-16
 
-## [Unreleased]
+The first release of this repository: Desktop Recorder 2.0.0 plus the changes below.
 
-### On `main` (since Desktop Recorder 2.0.0)
-
-#### Changed
+### Changed
 
 - "Changes only": a still screen keeps one frame each 60 s, not each 1 s. The goal is fewer frames for an AI to read. (`mpdecimate` `max` = 60 s of frames.)
+- Release files are named `screen-vibe-recorder-<version>-...`. Each release also has `DesktopRecorder.exe` alone and `SHA256SUMS.txt`. The Release workflow can also start by hand, and it takes the notes from `packaging/release-notes/`.
+- Version 2.1.0 in `DesktopRecorder.manifest`.
+- README: new front page (summary table, contents, quick start, update steps). It names this repository, explains the relation to Desktop Recorder, and says where to download.
+- `HANDOFF.md` section 7.2 records how Desktop Recorder 2.0.0 was published, with a corrected path. (`febdccc`, `cb07dff`)
 
-#### Fixed
+### Fixed
 
 - "Changes only": the default `mpdecimate` thresholds dropped a one-character change ("x.y" to "x,y"). The filter now uses `hi=64:lo=64:frac=0`. This fix is necessary with the longer keep-alive time, because a dropped change was lost for all time.
-
 - `packaging/make-windows-zip.sh` gives the paths to Python as arguments. A Windows path such as `D:\a\_temp` inside the Python source became an escape sequence, so the zip step of the release workflow failed. (`febdccc`)
 
-#### Changed
-
-- `HANDOFF.md` section 7.2 records how Desktop Recorder 2.0.0 was published, with a corrected path. (`febdccc`, `cb07dff`)
-- README: names this repository, explains the relation to Desktop Recorder, and says where to download. No program change.
-
-### On branch `linux-port` (not merged into `main`)
+## Branch `linux-port` (not merged into `main`, not released)
 
 The Ubuntu 24.04 port of the Desktop Recorder 2.0 features. It is tested on GitHub Actions in this repository (HANDOFF decision 13).
 
-#### Added
+### Added
 
 - Ubuntu region selector with window detection, magnifier, dimming and keys. On Wayland, the selector shows a frame of the portal stream. (`f869f0c`)
 - Click-through border outside the region and a Stop button (X11). (`f869f0c`)
@@ -44,7 +40,7 @@ The Ubuntu 24.04 port of the Desktop Recorder 2.0 features. It is tested on GitH
 - Unit tests, Xvfb GUI tests, GStreamer pipeline tests and a CI job that tests the real archive on `ubuntu-24.04`. (`f869f0c`, `0f4a490`)
 - The Desktop Recorder 2.0.1 changes, merged from `test-kit`. (`e548c64`)
 
-#### Fixed
+### Fixed
 
 - A recording shorter than about 2 s had no frames. FFmpeg no longer probes the `x11grab` and rawvideo input. (`6a6d07b`)
 - A held hotkey fired again. The X11 hotkey filter now looks only at the hotkey key. (`6a6d07b`, `774d1ba`)
@@ -53,7 +49,7 @@ The Ubuntu 24.04 port of the Desktop Recorder 2.0 features. It is tested on GitH
 - Exit during the portal dialog ends at once. (`0f4a490`)
 - No busy loop below 0.5 fps. A gsettings list that does not parse no longer deletes the other GNOME shortcuts. Settings commits typed fps and split values before Save. The launcher also checks cairo. (`0f4a490`)
 
-#### Notes
+### Notes
 
 - The Linux version number 2.1.0 in `__init__.py` on this branch is a default from the design, not a decision (HANDOFF decision 13).
 - Not tested: a real GNOME desktop, Wayland with a real portal, NVENC on Linux, the real tray, audio, HiDPI and multi-monitor (HANDOFF section 6.11).

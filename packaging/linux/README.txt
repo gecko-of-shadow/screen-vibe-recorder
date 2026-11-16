@@ -1,4 +1,5 @@
-Desktop Recorder 2.0.0 for Ubuntu 24.04 (portable)
+Screen Vibe Recorder for Ubuntu 24.04 (portable)
+The program inside is named Desktop Recorder.
 
 Unpack this archive anywhere and run:
 
