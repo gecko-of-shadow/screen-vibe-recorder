@@ -487,6 +487,7 @@ Not checked: a run on Bran's PC with ddagrab, gdigrab and NVENC. UNVERIFIED: tha
 | libx264 fallback in the app | Bran: "seems ok" (2026-11-14). Not run. Still UNVERIFIED. |
 | Default fps 10 | Done (decision 10). Unit tests pass. |
 | Release v2.0.0 | Done (7.2). |
+| Release v2.1.0 (Screen Vibe Recorder) | 2026-11-16, Bran asked for it. Notes: `packaging/release-notes/v2.1.0.md`. The Release workflow makes the release (also by hand, `workflow_dispatch`). Assets: Windows zip, `DesktopRecorder.exe`, Linux archive, `SHA256SUMS.txt`. Not checked on Bran's PC. |
 
 ### 7.1 Later and future work (Bran, 2026-11-14)
 

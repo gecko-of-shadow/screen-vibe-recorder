@@ -1,13 +1,54 @@
-# Screen Vibe Recorder
+<p align="center">
+  <img src="packaging/icon/app-icon-source.jpg" alt="Screen Vibe Recorder icon" width="420">
+</p>
 
-Region screen recorder for AI frame reading (Windows and Ubuntu 24.04).
+<h1 align="center">Screen Vibe Recorder</h1>
 
-This repository holds a copy of [Desktop Recorder](https://github.com/gecko-of-shadow/desktop-recorder). The program inside is still named Desktop Recorder (`DesktopRecorder.exe` on Windows, `desktop-recorder` on Ubuntu). The `main` branch is Desktop Recorder version **2.0.0** (commit `cb07dff`, 2026-11-15). The branch [`linux-port`](https://github.com/gecko-of-shadow/screen-vibe-recorder/tree/linux-port) ports the 2.0 features to Ubuntu 24.04. See [Relation to Desktop Recorder](#relation-to-desktop-recorder) and [CHANGELOG.md](CHANGELOG.md).
+<p align="center">
+  <b>Record the part of the screen that has the text. Give the video to an AI. The AI reads every character.</b>
+</p>
 
-You select the area with the text. The program records that area at full resolution, so each character stays sharp. A still screen costs almost no space, so the files stay small.
+<p align="center">
+  <a href="https://github.com/gecko-of-shadow/screen-vibe-recorder/releases/latest"><b>Download the latest release</b></a>
+  &nbsp;·&nbsp;
+  <a href="#quick-start-windows">Quick start</a>
+  &nbsp;·&nbsp;
+  <a href="CHANGELOG.md">Patch notes</a>
+  &nbsp;·&nbsp;
+  <a href="#troubleshooting">Help</a>
+</p>
 
-- **Windows 10 and 11:** the full program, with the region selector. C# on .NET Framework 4, a tray front end for [FFmpeg](https://ffmpeg.org).
-- **Ubuntu Desktop 24.04 (`main`):** the earlier full-screen tray recorder (Python and GTK). It has no region selector. The region selector for Ubuntu is on the `linux-port` branch only.
+---
+
+## At a glance
+
+| | |
+|---|---|
+| **What it does** | Records a region of the screen to an MP4 that an AI can read frame by frame. |
+| **Why** | Sharp text at full resolution, no lost frames, and small files. A still screen costs almost nothing. |
+| **Systems** | Windows 10 and 11 (full program). Ubuntu 24.04 (earlier full-screen recorder). |
+| **Needs** | FFmpeg 6.0 or later. An NVIDIA GPU is used when the PC has one. |
+| **Hotkey** | **Win+Shift+D** opens the region selector. The same keys stop the recording. |
+| **Output** | Fragmented MP4. It goes on the clipboard when the recording stops. |
+| **Program name** | Desktop Recorder (`DesktopRecorder.exe`). See [Relation to Desktop Recorder](#relation-to-desktop-recorder). |
+
+## Contents
+
+| Start here | Use it | Learn more |
+|---|---|---|
+| [Quick start (Windows)](#quick-start-windows) | [Use it (Windows)](#use-it-windows) | [Capture and encoding](#capture-and-encoding-windows) |
+| [Download and install](#download-and-install) | [Region selector keys](#region-selector-keys) | [Choose a frame rate](#choose-a-frame-rate) |
+| [Update an existing copy](#update-an-existing-copy-windows) | [Settings](#settings-windows) | [Test results](#test-results) |
+| [Features](#features) | [Use it (Ubuntu 24.04)](#use-it-ubuntu-2404) | [Build from source](#build-from-source) |
+| | [Troubleshooting](#troubleshooting) | [More documents](#more-documents) |
+
+## Quick start (Windows)
+
+1. Install FFmpeg. In PowerShell: `winget install -e --id Gyan.FFmpeg`
+2. Download `screen-vibe-recorder-<version>-windows-x64.zip` from the [latest release](https://github.com/gecko-of-shadow/screen-vibe-recorder/releases/latest). Unzip it anywhere.
+3. Start `DesktopRecorder.exe`. An icon shows in the tray.
+4. Press **Win+Shift+D**, drag a box around the text, and release the mouse button. The recording starts.
+5. Press **Win+Shift+D** again to stop. Press **Ctrl+V** to paste the video into a chat or a folder.
 
 ## Features
 
@@ -17,7 +58,7 @@ Windows:
 - **One hotkey** starts and stops the recording. The hotkey is a setting.
 - **Recording frame.** A red frame and a Stop button show around the recorded area. Windows keeps them out of the video.
 - **GPU capture and encode.** `ddagrab` capture and `h264_nvenc` encode by default. The program uses `gdigrab` and `libx264` when the GPU path is not available.
-- **"Changes only" mode** (default). Frames that do not change are dropped. A still screen costs almost nothing.
+- **"Changes only" mode** (default). Frames that do not change are dropped. A still screen keeps one frame each 60 s. A one-character change is kept.
 - **Status line** after each recording: real frames, duplicates, dropped frames, file size.
 - The finished video goes on the **clipboard**. Press Ctrl+V to paste it into a chat or a folder.
 - **Per-monitor DPI aware.** All positions and sizes are physical pixels.
@@ -32,15 +73,14 @@ Ubuntu 24.04:
 
 ## Download and install
 
-This repository has no releases. Use one of these:
+Download from the [Releases page](https://github.com/gecko-of-shadow/screen-vibe-recorder/releases). Each release has these files:
 
-- Download a portable archive from the [Desktop Recorder releases](https://github.com/gecko-of-shadow/desktop-recorder/releases). Version 2.0.0 there has the same program code as `main` here. Later Desktop Recorder versions have fixes that are not in this repository.
-- Or [build from source](#build-from-source).
-
-| Platform | Archive | Start |
+| File | For | Start |
 |---|---|---|
-| Windows 10 and 11 (x64) | `desktop-recorder-<version>-windows-x64.zip` | `DesktopRecorder.exe` |
-| Ubuntu 24.04 (x86_64) | `desktop-recorder-<version>-linux-x86_64.tar.gz` | `./desktop-recorder` |
+| `screen-vibe-recorder-<version>-windows-x64.zip` | Windows 10 and 11 (x64), new install | `DesktopRecorder.exe` |
+| `DesktopRecorder.exe` | Windows, update of a copy that you have | `DesktopRecorder.exe` |
+| `screen-vibe-recorder-<version>-linux-x86_64.tar.gz` | Ubuntu 24.04 (x86_64) | `./desktop-recorder` |
+| `SHA256SUMS.txt` | Check the downloads | |
 
 Nothing is copied into Program Files, and the Linux archive does not need root.
 
@@ -59,6 +99,13 @@ The program uses an NVIDIA GPU to encode when the PC has one. Without an NVIDIA 
 Windows SmartScreen can show a warning, because the program is not signed. Click **More info**, then **Run anyway**.
 
 **Ubuntu 24.04.** The `README.txt` in the archive lists the apt packages that the program needs (the same list as in [Build from source](#ubuntu-2404)).
+
+### Update an existing copy (Windows)
+
+1. Exit Desktop Recorder (right-click the tray icon, then Exit).
+2. Download `DesktopRecorder.exe` from the [latest release](https://github.com/gecko-of-shadow/screen-vibe-recorder/releases/latest).
+3. Put it in place of your old `DesktopRecorder.exe`.
+4. Start it. Your settings stay in `%APPDATA%\DesktopRecorder\settings.txt`.
 
 ## Use it (Windows)
 
@@ -270,7 +317,7 @@ sudo apt install mono-devel libmono-system-windows-forms4.0-cil libmono-system-d
 
 ### Release archives
 
-A `v*` tag starts the Release workflow (`.github/workflows/release.yml`). It builds the Windows zip with `packaging/make-windows-zip.sh` and the Ubuntu archive with `packaging/make-linux-tarball.sh`, and attaches both to the GitHub release. No tag has been pushed to this repository yet.
+The Release workflow (`.github/workflows/release.yml`) starts on a `v*` tag, or by hand with a version. It builds the Windows zip (`packaging/make-windows-zip.sh`), the Ubuntu archive (`packaging/make-linux-tarball.sh`) and `DesktopRecorder.exe`, writes `SHA256SUMS.txt`, and makes the GitHub release. The release notes come from `packaging/release-notes/v<version>.md`.
 
 ## Test results
 
@@ -287,12 +334,13 @@ The test kit is in `test/`: a source text, an auto-scroll page, a frame-counter 
 
 ## More documents
 
+- [Releases](https://github.com/gecko-of-shadow/screen-vibe-recorder/releases): downloads and patch notes.
 - [CHANGELOG.md](CHANGELOG.md): changes in this repository, and how it relates to Desktop Recorder.
 - [HANDOFF.md](HANDOFF.md): requirements, decisions, test plans and full test results (from Desktop Recorder).
 - The full version history of the program is in the [Desktop Recorder releases](https://github.com/gecko-of-shadow/desktop-recorder/releases).
 
 ## Relation to Desktop Recorder
 
-- This repository was made on 2026-11-15. It is not a GitHub fork. Its `main` branch is the same commit as Desktop Recorder commit `cb07dff` ("Correct a path in HANDOFF.md section 7.2"). That is the Desktop Recorder 2.0.0 code plus a fix of the Windows zip script. `main` has no commits of its own.
+- This repository was made on 2026-11-15. It is not a GitHub fork. Its `main` branch is the same commit as Desktop Recorder commit `cb07dff` ("Correct a path in HANDOFF.md section 7.2"). That is the Desktop Recorder 2.0.0 code plus a fix of the Windows zip script. Screen Vibe Recorder 2.1.0 is the first release of this repository (see [CHANGELOG.md](CHANGELOG.md)).
 - The `linux-port` branch adds the Ubuntu 24.04 port of the 2.0 features: region selector, recording frame and Stop button (X11), NVENC with x264 fallback, "Changes only" mode, hide the pointer, status line, one hotkey to start and stop. It also has the Desktop Recorder 2.0.1 changes. CI on GitHub Actions (`ubuntu-24.04`, X11 on Xvfb) passes. A real GNOME desktop, Wayland and NVENC on Linux are not tested. The branch is not merged and not released. Its `HANDOFF.md` sections 5 (decision 13) and 6.11 give the details.
 - Desktop Recorder continued after `cb07dff` with versions 2.0.1 and 2.0.2 (see its releases). Those changes are not on `main` here.

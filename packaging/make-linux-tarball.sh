@@ -5,7 +5,7 @@ set -eu
 root=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
 version=${1:-1.0.0}
 out_dir=${2:-$root}
-name="desktop-recorder-${version}-linux-x86_64"
+name="screen-vibe-recorder-${version}-linux-x86_64"
 stage=$(mktemp -d)
 dest="$stage/$name"
 mkdir -p "$dest/desktop_recorder"

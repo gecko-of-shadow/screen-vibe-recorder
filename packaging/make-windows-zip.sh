@@ -6,7 +6,7 @@ root=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
 exe=${1:?path to DesktopRecorder.exe}
 version=${2:-1.0.0}
 out_dir=${3:-$root}
-name="desktop-recorder-${version}-windows-x64"
+name="screen-vibe-recorder-${version}-windows-x64"
 stage=$(mktemp -d)
 dest="$stage/$name"
 mkdir -p "$dest"
