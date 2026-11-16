@@ -451,6 +451,22 @@ Test: 10 s, 10 fps, ddagrab + h264_nvenc CQ 23, region 1120x892, still screen. A
 
 Not checked: the check box with a real click; the new build in Bran's tray (the running app locked `DesktopRecorder.exe`).
 
+### 6.10 "Changes only": fewer still frames (2026-11-16)
+
+Bran saw still frames in "Changes only" recordings and asked to raise `max`. Goal (Bran): give an AI the most screen context with the fewest frames to process.
+
+Cause (checked in the code and with FFmpeg 6.1 on Linux): `mpdecimate=max=ceil(fps)-1` kept one frame each second on a still screen, by design (bug 2 fix). A player also shows the last frame until the next frame, so a VFR file looks like a fixed-rate file.
+
+Change:
+
+- `max` = 60 s of frames (`RecorderCore.KeepAliveSeconds`). At 10 fps: `max=599`.
+- Thresholds `hi=64:lo=64:frac=0`. Test (Linux, white 1120x892 page, 14 px text, `max=0`): the FFmpeg defaults dropped "x.y" to "x,y" and a 1 px gray dot for all time. `hi=64` kept all changes. With a long `max`, the old thresholds could lose a small change completely.
+- Simulation with the new filter: 130 s, one small change at 3 s, then still: 4 frames (0, 3, 63, 123 s), 2.2 KB.
+
+Effects: on a still screen, the file length is correct to 60 s only. A killed recording can lose more frames, because frames come less often.
+
+Not checked: a run on Bran's PC with ddagrab, gdigrab and NVENC. UNVERIFIED: that ddagrab and gdigrab give no small noise that the low thresholds keep (that only makes files larger, like fixed mode).
+
 ## 7. Tracker
 
 | Item | Status |
@@ -462,7 +478,7 @@ Not checked: the check box with a real click; the new build in Bran's tray (the 
 | Region selector | Checked on Bran's PC (6.7). Bug 1 fixed. Flow changed by Bran: release starts, one hotkey starts and stops, no "record last region". |
 | Recording frame | Checked on Bran's PC (6.7). Border and Stop button show and work. WDA_EXCLUDEFROMCAPTURE works with ddagrab and gdigrab. |
 | ddagrab + NVENC backend | Checked on Bran's PC (6.7): ddagrab and gdigrab with NVENC, 4:2:0 and 4:4:4, no lost frames. libx264 fallback, multi-monitor and multi-GPU: UNVERIFIED. |
-| "Changes only" mode | Checked on Bran's PC (6.7, 6.8). Bug 2 fixed. Default since 2026-11-14 (section 5). UNVERIFIED: that every AI frame tool handles variable frame rate. |
+| "Changes only" mode | Checked on Bran's PC (6.7, 6.8). Bug 2 fixed. Default since 2026-11-14 (section 5). 2026-11-16: one frame each 60 s on a still screen, lower thresholds (6.10), UNVERIFIED on Bran's PC. UNVERIFIED: that every AI frame tool handles variable frame rate. |
 | GUI test of the new app on Bran's PC | Done (6.7). 5 bugs fixed. Start and stop made faster. Not checked: multi-monitor, `~`, Shift and Ctrl while dragging. |
 | Phase B test | Done (6.8). Gap rule holds. No run passes the 6.3 pass rule, because the reader fails emoji lines also on lossless frames. Decision about the default quality and "Changes only" is open for Bran. |
 | README update | Done (2026-11-14). `README.md` describes the new Windows app: selector flow and keys, all settings with the code defaults, capture and encoder fallbacks, quality table (CQ 28/23/17, CRF 32/27/21), "Changes only", the frame-rate rule from 6.8, a test summary, and the Windows unit-test commands. `packaging/windows/README.txt` has the new start and stop text. Checked: each default and label against `RecorderCore.cs`, `DesktopRecorder.cs` and `RegionSelector.cs`; the README unit-test commands ran as written on Bran's PC (tests: `ok`); the app build ran with the README options but a different `/out` path (the running app locks `DesktopRecorder.exe`); the Releases page has v1.0.0 only (`gh release list`). Not checked: the README on GitHub (not pushed). |

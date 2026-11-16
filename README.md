@@ -163,7 +163,7 @@ A lower number gives a sharper picture and a larger file. The AI read test read 
 
 **Frame-rate mode.**
 
-- Changes only (default): FFmpeg captures at the frame rate that you set and drops frames that do not change (`mpdecimate`, variable frame rate). This repository uses the default `mpdecimate` thresholds. Desktop Recorder 2.0.1 found that these can drop a one-character change (for example "x.y" to "x,y") that stays on the screen for less than 1 s, and lowered them. That fix is not in this repository. The file keeps at least one frame each second, so the length of the file stays correct. A still screen costs almost nothing.
+- Changes only (default): FFmpeg captures at the frame rate that you set and drops frames that do not change (`mpdecimate`, variable frame rate). The goal is an AI copy of the screen with the fewest frames. A frame is kept when any 8x8 pixel block changes by more than 64 (`hi=64:lo=64:frac=0`), so a one-character change is kept. The FFmpeg default thresholds dropped such a change. On a still screen, the file keeps one frame each 60 s only. Thus the length of the file is correct to 60 s: a still part at the end of a recording can be missing from the file length, but not from the content. A video player shows the last frame until the next frame comes, so the video looks normal. A tool that reads the video at a fixed rate makes copies of the frames again.
 - Fixed frame rate: every frame is kept.
 
 **Output.** Fragmented MP4. A recording is one file named `desktop_yyyy-mm-dd_hh-mm-ss_mmm.mp4`. When a recording is split, the parts are `desktop_yyyy-mm-dd_hh-mm-ss_mmm_000.mp4` and so on.
@@ -278,7 +278,7 @@ Version 2.0.0 was tested on one PC: one 1920x1080 monitor at 125% scale, RTX 406
 
 - **Frame rate.** All capture and encoder settings kept every frame at 10 fps. `ddagrab` with NVENC also kept every frame at 30 fps. No frame was lost during a fast scroll.
 - **Read test.** A Claude Sonnet reader read the frames of a 300-line test page. Every run below the frame-rate limit caught 300 of 300 lines. Errors were mostly in emoji lines, and they occurred on lossless frames too.
-- **File size.** A 10 s recording of a still area in "Changes only" mode gave 11 frames and 12 KB.
+- **File size.** A 10 s recording of a still area in "Changes only" mode gave 11 frames and 12 KB. That build kept one frame each second. The current build keeps one frame each 60 s (not tested on Windows yet).
 - **Pointer.** In "Changes only" mode, a moving mouse pointer on a still screen made the file 18 times larger. With the pointer hidden, the program dropped those frames.
 
 Not tested: PCs with two or more monitors (also `gdigrab` with an area across two monitors), monitors with different scales, the `libx264` fallback in the program, PCs without an NVIDIA GPU, and AI tools other than Claude. In the selector, these keys are not tested: `~`, Shift and Ctrl while you drag, C, M and P.
