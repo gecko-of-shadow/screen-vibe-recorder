@@ -2,30 +2,32 @@
 
 All notable changes to this repository are in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
-This file was made from the commit history.
+This file was made from the commit history. Dates are commit dates (UTC).
+
+No tagged releases yet. This repository has no releases and no tags.
 
 ## Relation to Desktop Recorder
 
-This repository was made on 2026-11-15 from [gecko-of-shadow/desktop-recorder](https://github.com/gecko-of-shadow/desktop-recorder). It is not a GitHub fork. The `main` branch here is Desktop Recorder commit `cb07dff` (2026-11-15), which is the Desktop Recorder 2.0.0 program plus the two commits below. All history before that commit is the Desktop Recorder history. See the [Desktop Recorder changelog](https://github.com/gecko-of-shadow/desktop-recorder/blob/main/CHANGELOG.md) and [releases](https://github.com/gecko-of-shadow/desktop-recorder/releases) for versions 1.0.0 to 2.0.2.
-
-This repository has no releases and no tags.
+This repository was made on 2026-11-15 from [gecko-of-shadow/desktop-recorder](https://github.com/gecko-of-shadow/desktop-recorder). It is not a GitHub fork. The `main` branch starts from Desktop Recorder commit `cb07dff` (2026-11-15): the Desktop Recorder 2.0.0 program plus the two commits `febdccc` and `cb07dff` below. All history up to `cb07dff` is the Desktop Recorder history. See the [Desktop Recorder changelog](https://github.com/gecko-of-shadow/desktop-recorder/blob/main/CHANGELOG.md) and [releases](https://github.com/gecko-of-shadow/desktop-recorder/releases) for versions 1.0.0 to 2.0.2.
 
 ## [Unreleased]
 
-### On `main` (since Desktop Recorder 2.0.0)
-
-#### Fixed
-
-- `packaging/make-windows-zip.sh` gives the paths to Python as arguments. A Windows path such as `D:\a\_temp` inside the Python source became an escape sequence, so the zip step of the release workflow failed. (`febdccc`)
+### On `main`
 
 #### Changed
 
-- `HANDOFF.md` section 7.2 records how Desktop Recorder 2.0.0 was published, with a corrected path. (`febdccc`, `cb07dff`)
-- README: names this repository, explains the relation to Desktop Recorder, and says where to download. No program change.
+- 2026-11-16: README: shorter, in a fixed order (description, status, download, usage, build, layout, license). It says what is and is not on `main`, and that the repository has no license file. No program change.
+- 2026-11-16: README: names this repository, explains the relation to Desktop Recorder, and says where to download. No program change. (`275af52`)
+- 2026-11-16: CHANGELOG.md added. (`96fd9ec`)
+- 2026-11-15: `HANDOFF.md` section 7.2 records how Desktop Recorder 2.0.0 was published, with a corrected path. (`febdccc`, `cb07dff`)
+
+#### Fixed
+
+- 2026-11-15: `packaging/make-windows-zip.sh` gives the paths to Python as arguments. A Windows path such as `D:\a\_temp` inside the Python source became an escape sequence, so the zip step of the release workflow failed. (`febdccc`)
 
 ### On branch `linux-port` (not merged into `main`)
 
-The Ubuntu 24.04 port of the Desktop Recorder 2.0 features. It is tested on GitHub Actions in this repository (HANDOFF decision 13).
+The Ubuntu 24.04 port of the Desktop Recorder 2.0 features, committed on 2026-11-15. It is tested on GitHub Actions in this repository (HANDOFF decision 13).
 
 #### Added
 
