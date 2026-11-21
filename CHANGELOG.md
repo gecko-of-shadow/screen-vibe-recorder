@@ -6,7 +6,7 @@ This file was made from the commit history.
 
 ## Relation to Desktop Recorder
 
-This repository was made on 2026-11-15 from [gecko-of-shadow/desktop-recorder](https://github.com/gecko-of-shadow/desktop-recorder). It is not a GitHub fork. The `main` branch here is Desktop Recorder commit `cb07dff` (2026-11-15), which is the Desktop Recorder 2.0.0 program plus the two commits below. All history before that commit is the Desktop Recorder history. See the [Desktop Recorder changelog](https://github.com/gecko-of-shadow/desktop-recorder/blob/main/CHANGELOG.md) and [releases](https://github.com/gecko-of-shadow/desktop-recorder/releases) for versions 1.0.0 to 2.0.2.
+This repository was made on 2026-11-15 from [gecko-of-shadow/desktop-recorder](https://github.com/gecko-of-shadow/desktop-recorder). It is not a GitHub fork. The `main` branch here is Desktop Recorder commit `cb07dff` (2026-11-15), which is the Desktop Recorder 2.0.0 program plus the two commits below. All history before that commit is the Desktop Recorder history. See the [Desktop Recorder changelog](https://github.com/gecko-of-shadow/desktop-recorder/blob/main/CHANGELOG.md) and [releases](https://github.com/gecko-of-shadow/desktop-recorder/releases) for versions 1.0.0 to 3.0.1.
 
 ## [2.1.0] - 2026-11-16
 
